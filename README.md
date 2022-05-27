@@ -6,11 +6,24 @@ This is a minimal JavaScript reader for the [TRX tractography file format](https
 
 [NiiVue provides a WebGL live demo of this code](https://niivue.github.io/niivue/features/tracts.html). This can be tested on any device (computer, laptop, phone). A sample TRX file is loaded by default, but users can drag and drop new streamlines in the niml.tract, TCX, TRK, TRX, and VTK formats.
 
+## Dependencies
+
+This software uses the following packages that can be installed using [npm](https://nodejs.org/en/download/package-manager/) with the command `npm install gl-matrix fflate fzstd`:
+
+ - [fflate](https://github.com/101arrowz/fflate) decompresses gzip and zip archives (trk, trx).
+ - [gl-matrix](https://github.com/toji/gl-matrix) provides matrix and vector types and operations.
+ - [fzstd](https://github.com/101arrowz/fzstd) decompresses zstd archives (trk).
+
+## Trouble shooting
+
+This code should be supported by all modern web browsers. If you want to use this code from the command line using node, your node version must be at least 14.11.2. Run the command `node --version` to determine your node version. Linux and MacOS users can often upgrade node using the command `npm install n -g` (though note that some operating systems freeze software versions). Alternatively, upgrade node from the [web site](https://nodejs.org/en/download/).
+
+
 ## Node.JS Command Line Demo
 
 The module `streamlineIO.mjs` provides JavaScript reading for streamlines in the TCX, TRK, TRX, and VTK formats. The included file `bench.mjs` demonstrates these capabilities by loading a streamline 11 times and reporting details regarding file size, loading time, and streamline properties.
 
-To run the demo:
+Assuming you have [node 14.11.2 or later]([web site](https://nodejs.org/en/download/) you can run the demo:
 
 ```
 $ git clone https://github.com/tee-ar-ex/trx-javascript
