@@ -591,7 +591,9 @@ async function readTRX(url, urlIsLocalFile = false) {
       nval = data.length / 2; //2 bytes per 16bit input
       vals = new Float32Array(nval);
       var u16 = new Uint16Array(data.buffer);
-      for (let i = 0; i < nval; i++) vals[i] = decodeFloat16(u16[i]);
+      const lut = new Float32Array(65536)
+      for (let i = 0; i < 65536; i++) lut[i] = decodeFloat16(i)
+      for (let i = 0; i < nval; i++) vals[i] = lut[u16[i]]
     } else continue; //not a data array
     nval = vals.length;
     //next: read data_per_group
