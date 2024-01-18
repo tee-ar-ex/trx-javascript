@@ -22,15 +22,21 @@ async function main() {
     let re = /(?:\.([^.]+))?$/;
     let ext = re.exec(fnm)[1];
     ext = ext.toUpperCase();
+    if (ext === 'GZ') {
+      ext = re.exec(fnm.slice(0, -3))[1]; // img.trk.gz -> img.trk
+      ext = ext.toUpperCase();
+    }
     let obj = [];
     let d = Date.now();
     let nrepeats = 11; //11 iterations, ignore first
     for (let i = 0; i < nrepeats; i++) {
         if (i == 1) d = Date.now(); //ignore first run for interpretting/disk
-        if (ext === "FIB" || ext === "VTK" || ext === "TCK" || ext === "TRK" || ext === "GZ" || ext === "ZSTD" || ext === "ZST") {
+        if (ext === "FIB" || ext === "TT" ||ext === "VTK" || ext === "TCK" || ext === "TRK" || ext === "ZSTD" || ext === "ZST") {
             const buf = fs.readFileSync(fnm);
             if (ext === "TCK")
                 obj = streamline.readTCK(new Uint8Array(buf).buffer);
+            else if (ext === "TT")
+                obj = streamline.readTT(new Uint8Array(buf).buffer);
             else if (ext === "FIB" || ext === "VTK")
                 obj = streamline.readVTK(new Uint8Array(buf).buffer);
             else
