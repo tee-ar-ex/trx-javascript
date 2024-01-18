@@ -99,35 +99,36 @@ function readTRK(buffer) {
   //read and transform vertex positions
   let i = 0;
   let npt = 0;
-  let offsetPt0 = [];
-  let pts = [];
+  //over-provision offset array to store number of segments
+  let offsetPt0 = new Uint32Array(i32.length);
+  let noffset = 0;;
+  //over-provision points array to store vertex positions
+  let npt3 = 0;
+  let pts = new Float32Array(i32.length);
   while (i < ntracks) {
     let n_pts = i32[i];
     i = i + 1; // read 1 32-bit integer for number of points in this streamline
-    offsetPt0.push(npt); //index of first vertex in this streamline
+    offsetPt0[noffset++] = npt; //index of first vertex in this streamline
     for (let j = 0; j < n_pts; j++) {
       let ptx = f32[i + 0];
       let pty = f32[i + 1];
       let ptz = f32[i + 2];
       i += 3; //read 3 32-bit floats for XYZ position
-      pts.push(
+      pts[npt3++] =
         ptx * vox2mmMat[0] +
           pty * vox2mmMat[1] +
           ptz * vox2mmMat[2] +
-          vox2mmMat[3]
-      );
-      pts.push(
+          vox2mmMat[3];
+      pts[npt3++] =
         ptx * vox2mmMat[4] +
           pty * vox2mmMat[5] +
           ptz * vox2mmMat[6] +
-          vox2mmMat[7]
-      );
-      pts.push(
+          vox2mmMat[7];
+      pts[npt3++] =
         ptx * vox2mmMat[8] +
           pty * vox2mmMat[9] +
           ptz * vox2mmMat[10] +
-          vox2mmMat[11]
-      );
+          vox2mmMat[11];
       if (n_scalars > 0) {
         for (let s = 0; s < n_scalars; s++) {
           dpv[s].vals.push(f32[i]);
@@ -143,7 +144,11 @@ function readTRK(buffer) {
       }
     }
   } //for each streamline: while i < n_count
-  offsetPt0.push(npt); //add 'first index' as if one more line was added (fence post problem)
+  //add 'first index' as if one more line was added (fence post problem)
+  offsetPt0[noffset++] = npt;
+  //resize offset/vertex arrays that were initially over-provisioned
+  pts = pts.slice(0, npt3);
+  offsetPt0 = offsetPt0.slice(0, noffset); 
   return {
     pts,
     offsetPt0,
@@ -176,9 +181,13 @@ function readTCK(buffer) {
   let reader = new DataView(buffer);
   //read and transform vertex positions
   let npt = 0;
-  let offsetPt0 = [];
-  offsetPt0.push(npt); //1st streamline starts at 0
-  let pts = [];
+  //over-provision offset array to store number of segments
+  let offsetPt0 = new Uint32Array(len / 4);
+  let noffset = 0;
+  //over-provision points array to store vertex positions
+  let npt3 = 0;
+  let pts = new Float32Array(len / 4);
+  offsetPt0[0] = 0; //1st streamline starts at 0
   while (pos + 12 < len) {
     let ptx = reader.getFloat32(pos, true);
     pos += 4;
@@ -188,17 +197,20 @@ function readTCK(buffer) {
     pos += 4;
     if (!isFinite(ptx)) {
       //both NaN and Inifinity are not finite
-      offsetPt0.push(npt);
+      offsetPt0[noffset++] = npt;
       if (!isNaN(ptx))
         //terminate if infinity
         break;
     } else {
-      pts.push(ptx);
-      pts.push(pty);
-      pts.push(ptz);
+      pts[npt3++] = ptx;
+      pts[npt3++] = pty;
+      pts[npt3++] = ptz;
       npt++;
     }
   }
+  //resize offset/vertex arrays that were initially over-provisioned
+  pts = pts.slice(0, npt3);
+  offsetPt0 = offsetPt0.slice(0, noffset); 
   return {
     pts,
     offsetPt0,
