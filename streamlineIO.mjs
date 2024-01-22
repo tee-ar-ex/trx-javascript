@@ -246,7 +246,7 @@ function readTRK(buffer) {
     mat4.identity(mat);
   }
   let vox2mmMat = mat4.create();
-  mat4.mul(vox2mmMat, mat, zoomMat);
+  mat4.mul(vox2mmMat, zoomMat, mat);
   let i32 = null;
   let f32 = null;
   i32 = new Int32Array(buffer.slice(hdr_sz));
