@@ -247,30 +247,36 @@ function readTRK(buffer) {
   }
   let vox2mmMat = mat4.create();
   mat4.mul(vox2mmMat, zoomMat, mat);
-  let i32 = null;
-  let f32 = null;
-  i32 = new Int32Array(buffer.slice(hdr_sz));
-  f32 = new Float32Array(i32.buffer);
+  let dataView = new DataView(buffer, hdr_sz);
+  let totalWords = dataView.byteLength / 4;
 
-  let ntracks = i32.length;
-  //read and transform vertex positions
-  let i = 0;
+  let num_streamlines = 0;
+  let num_points = 0;
+  let w = 0;
+  while (w < totalWords) {
+    let n_pts = dataView.getInt32(w * 4, true);
+    num_streamlines++;
+    num_points += n_pts;
+    w += 1 + n_pts * (3 + n_scalars) + n_properties;
+  }
+
+  let offsetPt0 = new Uint32Array(num_streamlines + 1);
+  let pts = new Float32Array(num_points * 3);
+
+  w = 0;
   let npt = 0;
-  //over-provision offset array to store number of segments
-  let offsetPt0 = new Uint32Array(i32.length);
-  let noffset = 0;;
-  //over-provision points array to store vertex positions
+  let noffset = 0;
   let npt3 = 0;
-  let pts = new Float32Array(i32.length);
-  while (i < ntracks) {
-    let n_pts = i32[i];
-    i = i + 1; // read 1 32-bit integer for number of points in this streamline
+
+  while (w < totalWords) {
+    let n_pts = dataView.getInt32(w * 4, true);
+    w = w + 1; // read 1 32-bit integer for number of points in this streamline
     offsetPt0[noffset++] = npt; //index of first vertex in this streamline
     for (let j = 0; j < n_pts; j++) {
-      let ptx = f32[i + 0];
-      let pty = f32[i + 1];
-      let ptz = f32[i + 2];
-      i += 3; //read 3 32-bit floats for XYZ position
+      let ptx = dataView.getFloat32(w * 4, true);
+      let pty = dataView.getFloat32((w + 1) * 4, true);
+      let ptz = dataView.getFloat32((w + 2) * 4, true);
+      w += 3; //read 3 32-bit floats for XYZ position
       pts[npt3++] =
         ptx * vox2mmMat[0] +
           pty * vox2mmMat[1] +
@@ -288,24 +294,21 @@ function readTRK(buffer) {
           vox2mmMat[11];
       if (n_scalars > 0) {
         for (let s = 0; s < n_scalars; s++) {
-          dpv[s].vals.push(f32[i]);
-          i++;
+          dpv[s].vals.push(dataView.getFloat32(w * 4, true));
+          w++;
         }
       }
       npt++;
     } // for j: each point in streamline
     if (n_properties > 0) {
       for (let j = 0; j < n_properties; j++) {
-        dps[j].vals.push(f32[i]);
-        i++;
+        dps[j].vals.push(dataView.getFloat32(w * 4, true));
+        w++;
       }
     }
-  } //for each streamline: while i < n_count
+  } //for each streamline: while w < totalWords
   //add 'first index' as if one more line was added (fence post problem)
   offsetPt0[noffset++] = npt;
-  //resize offset/vertex arrays that were initially over-provisioned
-  pts = pts.slice(0, npt3);
-  offsetPt0 = offsetPt0.slice(0, noffset); 
   return {
     pts,
     offsetPt0,
@@ -345,6 +348,7 @@ function readTCK(buffer) {
   let npt3 = 0;
   let pts = new Float32Array(len / 4);
   offsetPt0[0] = 0; //1st streamline starts at 0
+  noffset = 1;
   while (pos + 12 < len) {
     let ptx = reader.getFloat32(pos, true);
     pos += 4;
@@ -666,6 +670,87 @@ function readVTK (buffer) {
   };
 }; // readVTK()
 
+function getZip64OriginalSizes(zipData) {
+  // Parse the ZIP central directory to get correct uncompressed sizes.
+  // fflate ZIP64 bug: file.originalSize in the filter callback returns 0xFFFFFFFF
+  // (the 32-bit sentinel) instead of reading the real size from the ZIP64
+  // extended information extra field (tag 0x0001) in the central directory.
+  //
+  // Supports ZIP32 (entries < 4 GB, CD < 4 GB) and ZIP64 (entries or CD
+  // offset up to 2^53 bytes, the JavaScript safe-integer limit).
+  let u8;
+  if (zipData instanceof ArrayBuffer) {
+    u8 = new Uint8Array(zipData);
+  } else {
+    u8 = new Uint8Array(zipData.buffer, zipData.byteOffset, zipData.byteLength);
+  }
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const n = u8.byteLength;
+  const sizes = {};
+
+  // Read a 64-bit little-endian uint as a JS number (safe up to 2^53)
+  function getUint64(offset) {
+    const lo = dv.getUint32(offset,     true);
+    const hi = dv.getUint32(offset + 4, true);
+    return hi * 0x100000000 + lo;
+  }
+
+  // Find End of Central Directory record (PK\x05\x06) scanning backwards.
+  // Stop 22 bytes from end (minimum EOCD size); allow up to 64 KB ZIP comment.
+  let eocd = -1;
+  for (let i = n - 22; i >= Math.max(0, n - 65558); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd === -1) return sizes;
+
+  let cdCount  = dv.getUint16(eocd + 8,  true);
+  let cdOffset = dv.getUint32(eocd + 16, true);
+
+  // Check for ZIP64 EOCD locator (PK\x06\x07), which must sit exactly 20
+  // bytes before the EOCD when no ZIP comment is present, but the ZIP spec
+  // only guarantees it precedes the EOCD — scan the last 64 KB for it.
+  for (let i = eocd - 20; i >= Math.max(0, eocd - 65558); i--) {
+    if (dv.getUint32(i, true) === 0x07064b50) {          // PK\x06\x07
+      const eocd64off = getUint64(i + 8);                // offset of ZIP64 EOCD
+      if (eocd64off + 56 <= n && dv.getUint32(eocd64off, true) === 0x06064b50) {
+        cdCount  = getUint64(eocd64off + 32);            // 8-byte total entry count
+        cdOffset = getUint64(eocd64off + 48);            // 8-byte CD start offset
+      }
+      break;
+    }
+  }
+
+  // Parse central directory records
+  let pos = cdOffset;
+  for (let i = 0; i < cdCount; i++) {
+    if (pos + 46 > n || dv.getUint32(pos, true) !== 0x02014b50) break; // PK\x01\x02
+    let origSize = dv.getUint32(pos + 24, true);
+    const fnLen  = dv.getUint16(pos + 28, true);
+    const exLen  = dv.getUint16(pos + 30, true);
+    const cmLen  = dv.getUint16(pos + 32, true);
+    const fname  = new TextDecoder().decode(u8.subarray(pos + 46, pos + 46 + fnLen));
+    // If 0xFFFFFFFF, read real size from ZIP64 extended info extra field (tag 0x0001).
+    // The ZIP64 extra field encodes: origSize (8), compSize (8), localOffset (8),
+    // diskStart (4) — but only the fields that were 0xFFFFFFFF in the CD are present.
+    if (origSize === 0xFFFFFFFF) {
+      let ep = pos + 46 + fnLen;
+      const epEnd = ep + exLen;
+      while (ep + 4 <= epEnd) {
+        const tag = dv.getUint16(ep,     true);
+        const sz  = dv.getUint16(ep + 2, true);
+        if (tag === 0x0001 && sz >= 8) {
+          origSize = getUint64(ep + 4);  // first 8-byte field is original size
+          break;
+        }
+        ep += 4 + sz;
+      }
+    }
+    sizes[fname] = origSize;
+    pos += 46 + fnLen + exLen + cmLen;
+  }
+  return sizes;
+} // getZip64OriginalSizes()
+
 async function readTRX(url, urlIsLocalFile = false) {
   //Javascript does not support float16, so we convert to float32
   //https://stackoverflow.com/questions/5678432/decompressing-half-precision-floats-in-javascript
@@ -690,19 +775,50 @@ async function readTRX(url, urlIsLocalFile = false) {
   let npt = 0;
   let pts = [];
   let offsetPt0 = [];
-  let dpg = [];
-  let dps = [];
   let dpv = [];
+  let dps = [];
+  let dpg = [];
+  let groups = [];
   let header = [];
   let isOverflowUint64 = false;
+  let positions_dtype = "float32";
   let data = [];
+  function getAlignedArray(constructor, dataArray) {
+      const bytes = constructor.BYTES_PER_ELEMENT;
+      if (dataArray.byteOffset % bytes === 0) {
+          return new constructor(dataArray.buffer, dataArray.byteOffset, dataArray.byteLength / bytes);
+      } else {
+          return new constructor(dataArray.slice().buffer);
+      }
+  }
   if (urlIsLocalFile) {
-    data = fs.readFileSync(url);
+    const stats = fs.statSync(url);
+    if (stats.size >= 2 * 1024 * 1024 * 1024) {
+      const size = stats.size;
+      const arrayBuffer = new ArrayBuffer(size);
+      const uint8Array = new Uint8Array(arrayBuffer);
+      const fd = fs.openSync(url, 'r');
+      const chunkSize = 512 * 1024 * 1024;
+      let offset = 0;
+      while (offset < size) {
+        const bytesToRead = Math.min(chunkSize, size - offset);
+        const bytesRead = fs.readSync(fd, uint8Array, offset, bytesToRead, offset);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      fs.closeSync(fd);
+      data = Buffer.from(arrayBuffer);
+    } else {
+      data = fs.readFileSync(url);
+    }
   } else {
     let response = await fetch(url);
     if (!response.ok) throw Error(response.statusText);
     data = await response.arrayBuffer();
   }
+  // Parse the ZIP central directory ourselves: fflate's file.originalSize
+  // returns 0xFFFFFFFF for ZIP64 entries instead of reading the ZIP64 extra field.
+  const sizeMap = getZip64OriginalSizes(data);
   const decompressed = fflate.unzipSync(data, {
     filter(file) {
       return file.originalSize > 0;
@@ -717,22 +833,29 @@ async function readTRX(url, urlIsLocalFile = false) {
     let tag = fname.split(".")[0]; // "positions.3.float16 -> "positions"
     //todo: should tags be censored for invalide characters: https://stackoverflow.com/questions/8676011/which-characters-are-valid-invalid-in-a-json-key-name
     let data = decompressed[keys[i]];
+    // Truncate to the size recorded in the ZIP central directory to work
+    // around a fflate ZIP64 bug where extra bytes from subsequent entries
+    // are appended to the decompressed output.
+    const correctByteLength = sizeMap[keys[i]];
+    if (correctByteLength !== undefined && data.byteLength > correctByteLength) {
+      data = data.slice(0, correctByteLength);
+    }
     if (fname.includes("header.json")) {
       let jsonString = new TextDecoder().decode(data);
-      header = JSON.parse(jsonString);
+      // Strip UTF-8 BOM if present (some tools prepend \uFEFF)
+      if (jsonString.charCodeAt(0) === 0xFEFF) jsonString = jsonString.slice(1);
+      header = JSON.parse(jsonString.trim());
       continue;
     }
+
+
     //next read arrays for all possible datatypes: int8/16/32/64 uint8/16/32/64 float16/32/64
     let nval = 0;
     let vals = [];
     if (fname.endsWith(".uint64") || fname.endsWith(".int64")) {
-      //javascript does not have 64-bit integers! read lower 32-bits
-      //note for signed int64 we only read unsigned bytes
-      //for both signed and unsigned, generate an error if any value is out of bounds
-      //one alternative might be to convert to 64-bit double that has a flintmax of 2^53.
       nval = data.length / 8; //8 bytes per 64bit input
       vals = new Uint32Array(nval);
-      var u32 = new Uint32Array(data.buffer);
+      const u32 = getAlignedArray(Uint32Array, data);
       let j = 0;
       for (let i = 0; i < nval; i++) {
         vals[i] = u32[j];
@@ -740,35 +863,44 @@ async function readTRX(url, urlIsLocalFile = false) {
         j += 2;
       }
     } else if (fname.endsWith(".uint32")) {
-      vals = new Uint32Array(data.buffer);
+      vals = getAlignedArray(Uint32Array, data);
     } else if (fname.endsWith(".uint16")) {
-      vals = new Uint16Array(data.buffer);
+      vals = getAlignedArray(Uint16Array, data);
     } else if (fname.endsWith(".uint8")) {
-      vals = new Uint8Array(data.buffer);
+      vals = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     } else if (fname.endsWith(".int32")) {
-      vals = new Int32Array(data.buffer);
+      vals = getAlignedArray(Int32Array, data);
     } else if (fname.endsWith(".int16")) {
-      vals = new Int16Array(data.buffer);
+      vals = getAlignedArray(Int16Array, data);
     } else if (fname.endsWith(".int8")) {
-      vals = new Int8Array(data.buffer);
+      vals = new Int8Array(data.buffer, data.byteOffset, data.byteLength);
     } else if (fname.endsWith(".float64")) {
-      vals = new Float64Array(data.buffer);
+      vals = getAlignedArray(Float64Array, data);
     } else if (fname.endsWith(".float32")) {
-      vals = new Float32Array(data.buffer);
+      vals = getAlignedArray(Float32Array, data);
     } else if (fname.endsWith(".float16")) {
-      //javascript does not have 16-bit floats! Convert to 32-bits
       nval = data.length / 2; //2 bytes per 16bit input
       vals = new Float32Array(nval);
-      var u16 = new Uint16Array(data.buffer);
+      const u16 = getAlignedArray(Uint16Array, data);
       const lut = new Float32Array(65536)
       for (let i = 0; i < 65536; i++) lut[i] = decodeFloat16(i)
       for (let i = 0; i < nval; i++) vals[i] = lut[u16[i]]
     } else continue; //not a data array
     nval = vals.length;
     //next: read data_per_group
-    if (pname.includes("dpg")) {
+    if (parts[0] === "dpg") {
       dpg.push({
+        id: parts[1] + "/" + tag, // e.g. "AF_R/volume"
+        fname: parts.slice(1).join("/"), // e.g. "AF_R/volume.uint32"
+        vals: vals.slice(),
+      });
+      continue;
+    }
+    //next: read groups
+    if (pname === "groups") {
+      groups.push({
         id: tag,
+        fname: fname,
         vals: vals.slice(),
       });
       continue;
@@ -777,6 +909,7 @@ async function readTRX(url, urlIsLocalFile = false) {
     if (pname.includes("dpv")) {
       dpv.push({
         id: tag,
+        fname: fname,
         vals: vals.slice(),
       });
       continue;
@@ -785,6 +918,7 @@ async function readTRX(url, urlIsLocalFile = false) {
     if (pname.includes("dps")) {
       dps.push({
         id: tag,
+        fname: fname,
         vals: vals.slice(),
       });
       continue;
@@ -800,18 +934,29 @@ async function readTRX(url, urlIsLocalFile = false) {
     if (fname.startsWith("positions.3.")) {
       npt = nval; //4 bytes per 32bit input
       pts = vals.slice();
+      if (fname.endsWith(".float64")) positions_dtype = "float64";
+      else if (fname.endsWith(".float16")) positions_dtype = "float16";
+      else positions_dtype = "float32";
     }
   }
   if (noff === 0 || npt === 0) alert("Failure reading TRX format");
   if (isOverflowUint64)
     alert("Too many vertices: JavaScript does not support 64 bit integers");
-  offsetPt0[noff] = npt / 3; //solve fence post problem, offset for final streamline
+
+  if (offsetPt0[noff - 1] === npt / 3) {
+    offsetPt0 = offsetPt0.slice(0, noff);
+  } else {
+    offsetPt0[noff] = npt / 3; //solve fence post problem, offset for final streamline
+  }
+
   return {
     pts,
     offsetPt0,
-    dpg,
     dps,
     dpv,
+    dpg,
+    groups,
     header,
+    positions_dtype,
   };
 }; // readTRX()
