@@ -309,13 +309,25 @@ function readTRK(buffer) {
   } //for each streamline: while w < totalWords
   //add 'first index' as if one more line was added (fence post problem)
   offsetPt0[noffset++] = npt;
+  let header = {
+    DIMENSIONS: [reader.getInt16(6, true), reader.getInt16(8, true), reader.getInt16(10, true)],
+    VOXEL_SIZES: [voxel_sizeX, voxel_sizeY, voxel_sizeZ],
+    VOXEL_TO_RASMM: [
+      [mat[0], mat[1], mat[2], mat[3]],
+      [mat[4], mat[5], mat[6], mat[7]],
+      [mat[8], mat[9], mat[10], mat[11]],
+      [mat[12], mat[13], mat[14], mat[15]]
+    ]
+  };
+
   return {
     pts,
     offsetPt0,
     dps,
     dpv,
+    header
   };
-}; //readTRK()
+} // readTRK()
 
 function readTCK(buffer) {
   //https://mrtrix.readthedocs.io/en/latest/getting_started/image_data.html#tracks-file-format-tck
