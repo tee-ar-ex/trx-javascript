@@ -1,7 +1,7 @@
 //Install dependencies
 // npm install gl-matrix fflate fzstd
 
-export { readTRK, readTCK, readVTK, readTRX, readTT, saveTCK, saveTRK, saveVTK, saveTRX };
+export { readTRK, readTCK, readVTK, readTRX, readTT, saveTCK, saveTRK, saveVTK, saveTRX, readNiftiHeader };
 import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
 import * as fs from "fs";
 import * as fflate from "fflate";
@@ -1069,12 +1069,13 @@ function saveTCK(filepath, obj) {
     fs.closeSync(fd);
 }
 
-function saveTRK(filepath, obj, originalFilename) {
+function saveTRK(filepath, obj, originalFilename, refHeader = null) {
     const fd = fs.openSync(filepath, 'w');
     const headerBytes = new Uint8Array(1000);
     const view = new DataView(headerBytes.buffer);
 
-    headerBytes.set([84, 82, 65, 67, 75], 0);
+    headerBytes.set([84, 82, 65, 67, 75], 0); // 'TRACK'
+    headerBytes.set([82, 65, 83, 0], 948);     // 'RAS\0' voxel_order
 
     let dim = [256, 256, 256];
     let voxelSize = [1, 1, 1];
@@ -1085,17 +1086,16 @@ function saveTRK(filepath, obj, originalFilename) {
         [0, 0, 0, 1]
     ];
 
-    if (obj.header) {
-        if (obj.header.DIMENSIONS) dim = obj.header.DIMENSIONS;
-        if (obj.header.VOXEL_TO_RASMM) {
-            voxToRas = obj.header.VOXEL_TO_RASMM;
-            voxelSize = [
-                Math.sqrt(voxToRas[0][0]**2 + voxToRas[1][0]**2 + voxToRas[2][0]**2),
-                Math.sqrt(voxToRas[0][1]**2 + voxToRas[1][1]**2 + voxToRas[2][1]**2),
-                Math.sqrt(voxToRas[0][2]**2 + voxToRas[1][2]**2 + voxToRas[2][2]**2)
-            ];
-        }
-    }
+    const resolvedHeader = (obj.header && obj.header.VOXEL_TO_RASMM) ? obj.header : refHeader;
+    if (!resolvedHeader) throw new Error("TCK/VTK → TRK requires a reference NIfTI header (pass refHeader)");
+
+    dim = resolvedHeader.DIMENSIONS;
+    voxToRas = resolvedHeader.VOXEL_TO_RASMM;
+    voxelSize = [
+        Math.sqrt(voxToRas[0][0]**2 + voxToRas[1][0]**2 + voxToRas[2][0]**2),
+        Math.sqrt(voxToRas[0][1]**2 + voxToRas[1][1]**2 + voxToRas[2][1]**2),
+        Math.sqrt(voxToRas[0][2]**2 + voxToRas[1][2]**2 + voxToRas[2][2]**2)
+    ];
 
     view.setInt16(6, dim[0], true);
     view.setInt16(8, dim[1], true);
@@ -1112,20 +1112,35 @@ function saveTRK(filepath, obj, originalFilename) {
             off += 4;
         }
     }
+    // Removed hardcoded RAS voxel order to prevent coordinate flipping by Nibabel
+    // Reconstruct the exact readTRK scaling matrix
+    let zoomMat = mat4.fromValues(
+        1 / voxelSize[0], 0, 0, -0.5,
+        0, 1 / voxelSize[1], 0, -0.5,
+        0, 0, 1 / voxelSize[2], -0.5,
+        0, 0, 0, 1
+    );
 
-    headerBytes.set([82, 65, 83, 0], 948);
+    // Map TRK header to a row-major array matching readTRK behavior
+    let mat = mat4.create();
+    mat[0] = voxToRas[0][0]; mat[1] = voxToRas[0][1]; mat[2] = voxToRas[0][2]; mat[3] = voxToRas[0][3];
+    mat[4] = voxToRas[1][0]; mat[5] = voxToRas[1][1]; mat[6] = voxToRas[1][2]; mat[7] = voxToRas[1][3];
+    mat[8] = voxToRas[2][0]; mat[9] = voxToRas[2][1]; mat[10] = voxToRas[2][2]; mat[11] = voxToRas[2][3];
+    mat[12] = voxToRas[3][0]; mat[13] = voxToRas[3][1]; mat[14] = voxToRas[3][2]; mat[15] = voxToRas[3][3];
 
-    let invMat = null;
-    if (obj.header && obj.header.VOXEL_TO_RASMM) {
-        let mat = mat4.fromValues(
-            voxToRas[0][0], voxToRas[1][0], voxToRas[2][0], voxToRas[3][0],
-            voxToRas[0][1], voxToRas[1][1], voxToRas[2][1], voxToRas[3][1],
-            voxToRas[0][2], voxToRas[1][2], voxToRas[2][2], voxToRas[3][2],
-            voxToRas[0][3], voxToRas[1][3], voxToRas[2][3], voxToRas[3][3]
-        );
-        invMat = mat4.create();
-        mat4.invert(invMat, mat);
-    }
+    let vox2mmMat = mat4.create();
+    mat4.mul(vox2mmMat, zoomMat, mat);
+
+    // Transpose to column-major for gl-matrix inversion
+    let colMajorVox2mm = mat4.create();
+    mat4.transpose(colMajorVox2mm, vox2mmMat);
+
+    let colMajorMm2trk = mat4.create();
+    mat4.invert(colMajorMm2trk, colMajorVox2mm);
+
+    // Transpose back to row-major for straightforward vector application
+    let mm2trkMat = mat4.create();
+    mat4.transpose(mm2trkMat, colMajorMm2trk);
 
     const numStreamlines = obj.offsetPt0.length - 1;
     view.setInt32(988, numStreamlines, true);
@@ -1134,7 +1149,7 @@ function saveTRK(filepath, obj, originalFilename) {
 
     fs.writeSync(fd, headerBytes);
 
-    const chunkSize = 16 * 1024 * 1024;
+    const chunkSize = 16 * 1024;
     const buf = new ArrayBuffer(chunkSize);
     const payloadView = new DataView(buf);
     const u8View = new Uint8Array(buf);
@@ -1164,21 +1179,10 @@ function saveTRK(filepath, obj, originalFilename) {
             let x = pts[j*3];
             let y = pts[j*3 + 1];
             let z = pts[j*3 + 2];
-            let vx = x, vy = y, vz = z;
 
-            if (invMat) {
-                let cx = x * invMat[0] + y * invMat[4] + z * invMat[8] + invMat[12];
-                let cy = x * invMat[1] + y * invMat[5] + z * invMat[9] + invMat[13];
-                let cz = x * invMat[2] + y * invMat[6] + z * invMat[10] + invMat[14];
-
-                vx = (cx + 0.5) * voxelSize[0];
-                vy = (cy + 0.5) * voxelSize[1];
-                vz = (cz + 0.5) * voxelSize[2];
-            } else {
-                vx = x + 0.5;
-                vy = y + 0.5;
-                vz = z + 0.5;
-            }
+            let vx = x * mm2trkMat[0] + y * mm2trkMat[1] + z * mm2trkMat[2] + mm2trkMat[3];
+            let vy = x * mm2trkMat[4] + y * mm2trkMat[5] + z * mm2trkMat[6] + mm2trkMat[7];
+            let vz = x * mm2trkMat[8] + y * mm2trkMat[9] + z * mm2trkMat[10] + mm2trkMat[11];
 
             payloadView.setFloat32(bufOffset, vx, true);
             payloadView.setFloat32(bufOffset + 4, vy, true);
@@ -1256,7 +1260,7 @@ function saveVTK(filepath, obj) {
     fs.closeSync(fd);
 }
 
-function saveTRX(filepath, obj, originalFilename) {
+function saveTRX(filepath, obj, originalFilename, refHeader = null) {
     let dtype = obj.positions_dtype || "float32";
     let ptsData = obj.pts;
     if (ptsData instanceof Float64Array) {
@@ -1286,10 +1290,10 @@ function saveTRX(filepath, obj, originalFilename) {
         "NB_VERTICES": numPoints
     };
 
-    if (obj.header) {
-        header.VOXEL_TO_RASMM = obj.header.VOXEL_TO_RASMM || header.VOXEL_TO_RASMM;
-        header.DIMENSIONS = obj.header.DIMENSIONS || header.DIMENSIONS;
-    }
+    const resolvedHeader = (obj.header && obj.header.VOXEL_TO_RASMM) ? obj.header : refHeader;
+    if (!resolvedHeader) throw new Error("TCK/VTK → TRX requires a reference NIfTI header (pass refHeader)");
+    header.VOXEL_TO_RASMM = resolvedHeader.VOXEL_TO_RASMM;
+    header.DIMENSIONS = resolvedHeader.DIMENSIONS;
 
     const zipObj = {};
     zipObj["header.json"] = fflate.strToU8(JSON.stringify(header, null, 4));
@@ -1353,7 +1357,111 @@ function saveTRX(filepath, obj, originalFilename) {
             zipObj[`groups/${getCorrectFname(prop)}`] = new Uint8Array(prop.vals.buffer, prop.vals.byteOffset, prop.vals.byteLength);
         }
     }
+    // Optionally save extra header files
+    if (obj.header && obj.header.extraFiles) {
+        for (const [fname, content] of Object.entries(obj.header.extraFiles)) {
+            zipObj[fname] = content;
+        }
+    }
 
     const zipped = fflate.zipSync(zipObj);
     fs.writeFileSync(filepath, zipped);
+}
+
+function readNiftiHeader(niftiPath) {
+    if (!fs.existsSync(niftiPath)) {
+        throw new Error("NIfTI file not found: " + niftiPath);
+    }
+    const buffer = fs.readFileSync(niftiPath);
+    if (buffer.byteLength < 4) {
+        throw new Error("Invalid NIfTI file: too small to contain header size");
+    }
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const sizeof_hdr = view.getInt32(0, true);
+
+    let isNifti1 = false;
+    let isNifti2 = false;
+    if (sizeof_hdr === 348) {
+        if (buffer.byteLength < 348) throw new Error("Invalid NIfTI file: file smaller than expected NIfTI-1 header");
+        isNifti1 = true;
+    } else if (sizeof_hdr === 540) {
+        if (buffer.byteLength < 540) throw new Error("Invalid NIfTI file: file smaller than expected NIfTI-2 header");
+        isNifti2 = true;
+    } else {
+        throw new Error("Invalid NIfTI file: unknown sizeof_hdr " + sizeof_hdr);
+    }
+
+    let dim = [];
+    let pixdim = [];
+    let qform_code, sform_code;
+    let quatern_b, quatern_c, quatern_d;
+    let qoffset_x, qoffset_y, qoffset_z;
+    let srow_x = [], srow_y = [], srow_z = [];
+
+    if (isNifti1) {
+        for(let i=0; i<8; i++) dim.push(view.getInt16(40 + i*2, true));
+        for(let i=0; i<8; i++) pixdim.push(view.getFloat32(76 + i*4, true));
+        qform_code = view.getInt16(252, true);
+        sform_code = view.getInt16(254, true);
+        quatern_b = view.getFloat32(256, true);
+        quatern_c = view.getFloat32(260, true);
+        quatern_d = view.getFloat32(264, true);
+        qoffset_x = view.getFloat32(268, true);
+        qoffset_y = view.getFloat32(272, true);
+        qoffset_z = view.getFloat32(276, true);
+        for(let i=0; i<4; i++) srow_x.push(view.getFloat32(280 + i*4, true));
+        for(let i=0; i<4; i++) srow_y.push(view.getFloat32(296 + i*4, true));
+        for(let i=0; i<4; i++) srow_z.push(view.getFloat32(312 + i*4, true));
+    } else {
+        for(let i=0; i<8; i++) dim.push(Number(view.getBigInt64(16 + i*8, true)));
+        for(let i=0; i<8; i++) pixdim.push(view.getFloat64(80 + i*8, true));
+        qform_code = view.getInt32(344, true);
+        sform_code = view.getInt32(348, true);
+        quatern_b = view.getFloat64(352, true);
+        quatern_c = view.getFloat64(360, true);
+        quatern_d = view.getFloat64(368, true);
+        qoffset_x = view.getFloat64(376, true);
+        qoffset_y = view.getFloat64(384, true);
+        qoffset_z = view.getFloat64(392, true);
+        for(let i=0; i<4; i++) srow_x.push(view.getFloat64(400 + i*8, true));
+        for(let i=0; i<4; i++) srow_y.push(view.getFloat64(432 + i*8, true));
+        for(let i=0; i<4; i++) srow_z.push(view.getFloat64(464 + i*8, true));
+    }
+
+    let DIMENSIONS = [dim[1], dim[2], dim[3]];
+    let VOXEL_TO_RASMM = [];
+
+    if (sform_code > 0) {
+        VOXEL_TO_RASMM = [srow_x, srow_y, srow_z, [0, 0, 0, 1]];
+    } else if (qform_code > 0) {
+        let b = quatern_b;
+        let c = quatern_c;
+        let d = quatern_d;
+        let a = Math.sqrt(Math.max(0, 1.0 - (b*b + c*c + d*d)));
+        let qfac = pixdim[0] === 0 ? 1 : pixdim[0];
+        let dx = pixdim[1];
+        let dy = pixdim[2];
+        let dz = pixdim[3];
+
+        let R00 = a*a + b*b - c*c - d*d;
+        let R01 = 2*(b*c - a*d);
+        let R02 = 2*(b*d + a*c);
+        let R10 = 2*(b*c + a*d);
+        let R11 = a*a + c*c - b*b - d*d;
+        let R12 = 2*(c*d - a*b);
+        let R20 = 2*(b*d - a*c);
+        let R21 = 2*(c*d + a*b);
+        let R22 = a*a + d*d - c*c - b*b;
+
+        VOXEL_TO_RASMM = [
+            [R00 * dx, R01 * dy, R02 * qfac * dz, qoffset_x],
+            [R10 * dx, R11 * dy, R12 * qfac * dz, qoffset_y],
+            [R20 * dx, R21 * dy, R22 * qfac * dz, qoffset_z],
+            [0, 0, 0, 1]
+        ];
+    } else {
+        throw new Error("NIfTI file has no valid spatial transform");
+    }
+
+    return { DIMENSIONS, VOXEL_TO_RASMM };
 }
