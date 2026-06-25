@@ -1,6 +1,16 @@
 //Install dependencies
 // npm install gl-matrix fflate fzstd
 
+/**
+ * @typedef {Object} StreamlineData
+ * @property {Float32Array} pts - Interleaved XYZ vertex positions for all streamlines.
+ * @property {Uint32Array} offsetPt0 - Start index of each streamline in `pts` (NB_STREAMLINES+1 entries; the final entry solves the fencepost problem).
+ * @property {Array<{id: string, vals: Float32Array|Uint32Array}>} [dps] - Data-per-streamline arrays (TRX, TRK).
+ * @property {Array<{id: string, vals: Float32Array|Uint32Array}>} [dpv] - Data-per-vertex arrays (TRX, TRK).
+ * @property {Array<{id: string, vals: Float32Array|Uint32Array}>} [dpg] - Data-per-group arrays (TRX only).
+ * @property {Object} [header] - Parsed header.json contents (TRX only).
+ */
+
 export { readTRK, readTCK, readVTK, readTRX, readTT };
 import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
 import * as fs from "fs";
@@ -92,8 +102,18 @@ function readMatV4(buffer) {
   return mat
 } // readMatV4()
 
-// https://dsi-studio.labsolver.org/doc/cli_data.html
-// https://brain.labsolver.org/hcp_trk_atlas.html
+/**
+ * Read a DSI Studio (.tt / .fib) file.
+ *
+ * Parses the Matlab V4 container, applies incremental zigzag decoding,
+ * and transforms voxel coordinates to RAS (mm) space using the
+ * `trans_to_mni` and `voxel_size` matrices.
+ *
+ * @param {ArrayBuffer} buffer - Raw file data (may be gzip-compressed; decompressed automatically).
+ * @returns {StreamlineData} An object with `pts` and `offsetPt0`.
+ */
+ // https://dsi-studio.labsolver.org/doc/cli_data.html
+ // https://brain.labsolver.org/hcp_trk_atlas.html
 function readTT(buffer) {
   let offsetPt0 = []
   let pts = []
@@ -169,6 +189,16 @@ function readTT(buffer) {
   }
 } // readTT()
 
+/**
+ * Read a TrackVis (.trk) file from an ArrayBuffer.
+ *
+ * Handles uncompressed, gzip-compressed, and zstd-compressed TRK files.
+ * Parses the 1000-byte header (scalars, properties, voxel-to-RAS matrix),
+ * reads vertex positions, and applies the voxel-to-RAS transform.
+ *
+ * @param {ArrayBuffer} buffer - Raw file data (may be gzip/zstd compressed; decompressed automatically).
+ * @returns {StreamlineData} An object with `pts`, `offsetPt0`, `dps`, and `dpv`.
+ */
 function readTRK(buffer) {
   // http://trackvis.org/docs/?subsect=fileformat
   // http://www.tractometer.org/fiberweb/
@@ -314,6 +344,16 @@ function readTRK(buffer) {
   };
 }; //readTRK()
 
+/**
+ * Read an MRtrix (.tck) file from an ArrayBuffer.
+ *
+ * Parses the text header up to the `END` marker, then reads
+ * float32 vertex positions. Streamlines are terminated by NaN
+ * (continue) or Infinity (stop) values in the X position.
+ *
+ * @param {ArrayBuffer} buffer - Raw file data.
+ * @returns {StreamlineData} An object with `pts` and `offsetPt0`.
+ */
 function readTCK(buffer) {
   //https://mrtrix.readthedocs.io/en/latest/getting_started/image_data.html#tracks-file-format-tck
   let len = buffer.byteLength;
@@ -514,6 +554,18 @@ function readTxtVTK(buffer) {
   };
 } // readTxtVTK()
 
+/**
+ * Read a VTK legacy (.vtk) file from an ArrayBuffer.
+ *
+ * Supports both ASCII and binary formats. Handles POLYDATA with
+ * LINES (classic and DiPy OFFSETS-style), TRIANGLE_STRIPS, and
+ * POLYGONS. Binary VTK files are expected in big-endian byte order.
+ *
+ * @param {ArrayBuffer} buffer - Raw file data.
+ * @returns {StreamlineData|{positions: Float32Array, indices: Int32Array}}
+ *   For streamline data (LINES) returns `{pts, offsetPt0}`.
+ *   For mesh data (TRIANGLE_STRIPS, POLYGONS) returns `{positions, indices}`.
+ */
 function readVTK (buffer) {
   let len = buffer.byteLength;
   if (len < 20)
@@ -666,6 +718,21 @@ function readVTK (buffer) {
   };
 }; // readVTK()
 
+/**
+ * Read a TRX (.trx) file — the modern tractography format.
+ *
+ * This is an **async** function. It fetches the TRX zip container,
+ * decompresses it, reads `header.json`, and parses positions, offsets,
+ * and per-group/per-streamline/per-vertex data arrays.
+ *
+ * Supports all numeric types including float16 (automatically converted
+ * to float32) and uint64/int64 (lower 32 bits only; warns on overflow).
+ *
+ * @param {string} url - URL or local file path (behavior controlled by `urlIsLocalFile`).
+ * @param {boolean} [urlIsLocalFile=false] - If `true`, reads from local filesystem via `fs.readFileSync`.
+ * @returns {Promise<StreamlineData>} A promise resolving to an object with `pts`, `offsetPt0`,
+ *   `dpg`, `dps`, `dpv`, and `header`.
+ */
 async function readTRX(url, urlIsLocalFile = false) {
   //Javascript does not support float16, so we convert to float32
   //https://stackoverflow.com/questions/5678432/decompressing-half-precision-floats-in-javascript
