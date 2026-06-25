@@ -3,6 +3,8 @@ name: Deploy docs to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
@@ -11,9 +13,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,10 +25,22 @@ jobs:
         run: npm install -g jsdoc
       - name: Build docs
         run: sphinx-build -b html docs/ docs/_build
-      - name: Upload Pages artifact
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/_build
+          name: ${{ github.event_name == 'pull_request'
+            && format('github-pages-preview-{0}', github.event.number)
+            || 'github-pages' }}
+          path: docs/_build/
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

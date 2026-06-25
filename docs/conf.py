@@ -23,6 +23,21 @@ exclude_patterns = ['_build', 'venv', 'Thumbs.db', '.DS_Store', 'node_modules']
 html_theme = 'pydata_sphinx_theme'
 html_static_path = ['_static']
 
+html_sidebars = {
+    "**": ["sidebar-collapse.html", "sidebar-nav-global.html"]
+}
+
+html_theme_options = {
+    "show_nav_level": 2,
+    "collapse_navigation": False,
+    "navigation_depth": 4,
+    "logo": {
+        "image_light": "_static/trx_logo.png",
+        "image_dark": "_static/trx_logo.png",
+        "alt_text": "trx-javascript",
+    },
+}
+
 myst_enable_extensions = [
     "colon_fence",
     "deflist",
