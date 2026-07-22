@@ -1440,7 +1440,7 @@ function saveTRX(filepath, obj, originalFilename, refHeader = null) {
         }
     }
 
-    const zipped = fflate.zipSync(zipObj);
+    const zipped = fflate.zipSync(zipObj, { level: 0 });
     fs.writeFileSync(filepath, zipped);
 }
 
