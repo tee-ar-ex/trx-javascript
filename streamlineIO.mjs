@@ -248,16 +248,20 @@ function readTRK(buffer) {
   let vox2mmMat = mat4.create();
   mat4.mul(vox2mmMat, zoomMat, mat);
   let dataView = new DataView(buffer, hdr_sz);
+  if ((dataView.byteLength & 3) !== 0) throw new Error("Invalid TRK: track data is not 32-bit aligned");
   let totalWords = dataView.byteLength / 4;
 
   let num_streamlines = 0;
   let num_points = 0;
   let w = 0;
   while (w < totalWords) {
-    let n_pts = dataView.getInt32(w * 4, true);
+    const n_pts = dataView.getInt32(w * 4, true);
+    if (n_pts < 0) throw new Error("Invalid TRK: negative point count");
+    const nextW = w + 1 + n_pts * (3 + n_scalars) + n_properties;
+    if (nextW > totalWords) throw new Error("Invalid TRK: truncated track data");
     num_streamlines++;
     num_points += n_pts;
-    w += 1 + n_pts * (3 + n_scalars) + n_properties;
+    w = nextW;
   }
 
   let offsetPt0 = new Uint32Array(num_streamlines + 1);
@@ -796,12 +800,12 @@ async function readTRX(url, urlIsLocalFile = false) {
   let positions_dtype = "float32";
   let data = [];
   function getAlignedArray(constructor, dataArray) {
-      const bytes = constructor.BYTES_PER_ELEMENT;
-      if (dataArray.byteOffset % bytes === 0) {
-          return new constructor(dataArray.buffer, dataArray.byteOffset, dataArray.byteLength / bytes);
-      } else {
-          return new constructor(dataArray.slice().buffer);
-      }
+    const bytes = constructor.BYTES_PER_ELEMENT;
+    if (dataArray.byteOffset % bytes === 0) {
+      return new constructor(dataArray.buffer, dataArray.byteOffset, dataArray.byteLength / bytes);
+    } else {
+      return new constructor(dataArray.slice().buffer);
+    }
   }
   if (urlIsLocalFile) {
     const stats = fs.statSync(url);
@@ -810,15 +814,18 @@ async function readTRX(url, urlIsLocalFile = false) {
       const arrayBuffer = new ArrayBuffer(size);
       const uint8Array = new Uint8Array(arrayBuffer);
       const fd = fs.openSync(url, 'r');
-      const chunkSize = 512 * 1024 * 1024;
-      let offset = 0;
-      while (offset < size) {
-        const bytesToRead = Math.min(chunkSize, size - offset);
-        const bytesRead = fs.readSync(fd, uint8Array, offset, bytesToRead, offset);
-        if (bytesRead === 0) break;
-        offset += bytesRead;
+      try {
+        const chunkSize = 512 * 1024 * 1024;
+        let offset = 0;
+        while (offset < size) {
+          const bytesToRead = Math.min(chunkSize, size - offset);
+          const bytesRead = fs.readSync(fd, uint8Array, offset, bytesToRead, offset);
+          if (bytesRead === 0) break;
+          offset += bytesRead;
+        }
+      } finally {
+        fs.closeSync(fd);
       }
-      fs.closeSync(fd);
       data = Buffer.from(arrayBuffer);
     } else {
       data = fs.readFileSync(url);
@@ -900,10 +907,12 @@ async function readTRX(url, urlIsLocalFile = false) {
     } else continue; //not a data array
     nval = vals.length;
     //next: read data_per_group
-    if (parts[0] === "dpg") {
+    const dpgIndex = parts.indexOf("dpg");
+    if (dpgIndex !== -1 && parts.length >= dpgIndex + 3) {
+      const groupId = parts[dpgIndex + 1];
       dpg.push({
-        id: parts[1] + "/" + tag, // e.g. "AF_R/volume"
-        fname: parts.slice(1).join("/"), // e.g. "AF_R/volume.uint32"
+        id: groupId + "/" + tag, // e.g. "AF_R/volume"
+        fname: parts.slice(dpgIndex + 1).join("/"), // e.g. "AF_R/volume.uint32"
         vals: vals.slice(),
       });
       continue;
