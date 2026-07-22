@@ -1049,11 +1049,12 @@ async function readTRX(url, urlIsLocalFile = false) {
   };
 }; // readTRX()
 // Fast float32 to float16 conversion
+const _f16_floatView = new Float32Array(1);
+const _f16_int32View = new Int32Array(_f16_floatView.buffer);
+
 function encodeFloat16(val) {
-    const floatView = new Float32Array(1);
-    const int32View = new Int32Array(floatView.buffer);
-    floatView[0] = val;
-    const f = int32View[0];
+    _f16_floatView[0] = val;
+    const f = _f16_int32View[0];
     
     const sign = (f >> 16) & 0x8000;
     let exponent = ((f >> 23) & 0xff) - 127;
