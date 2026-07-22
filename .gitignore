@@ -1,3 +1,5 @@
+.DS_store
+
 # Compiled class file
 *.class
 
@@ -22,7 +24,11 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 
-# JS modules
+# Node
 node_modules/
 package-lock.json
 package.json
+
+# Sphinx docs build output
+docs/_build/
+docs/venv/
