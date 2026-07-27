@@ -23,19 +23,30 @@ exclude_patterns = ['_build', 'venv', 'Thumbs.db', '.DS_Store', 'node_modules']
 html_theme = 'pydata_sphinx_theme'
 html_static_path = ['_static']
 
-html_sidebars = {
-    "**": ["sidebar-collapse.html", "sidebar-nav-global.html"]
-}
-
 html_theme_options = {
-    "show_nav_level": 2,
-    "collapse_navigation": False,
-    "navigation_depth": 4,
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/tee-ar-ex/trx-cpp",
+            "icon": "fa-brands fa-github",
+        },
+    ],
     "logo": {
         "image_light": "_static/trx_logo.png",
         "image_dark": "_static/trx_logo.png",
-        "alt_text": "trx-javascript",
-    },
+        "alt_text": "TRX",
+        "link": "https://tee-ar-ex.github.io",
+        },
+    "show_toc_level": 2,
+    "navigation_depth": 4,
+    "navigation_with_keys": True,
+    "show_nav_level": 2,
+    "navbar_align": "left",
+    "header_links_before_dropdown": 5,
+}
+
+html_sidebars = {
+    "**": ["sidebar-nav-bs.html"],
 }
 
 myst_enable_extensions = [
