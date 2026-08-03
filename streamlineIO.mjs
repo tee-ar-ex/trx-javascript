@@ -1,3 +1,105 @@
+
+function parseZipCentralDirectory(dataOrPath, isLocalFile) {
+    let fd = null;
+    let n = 0;
+    let dataBuffer = null;
+
+    if (isLocalFile) {
+        fd = fs.openSync(dataOrPath, 'r');
+        n = fs.fstatSync(fd).size;
+    } else {
+        dataBuffer = new Uint8Array(dataOrPath);
+        n = dataBuffer.byteLength;
+    }
+
+    function readBytes(offset, length) {
+        const buf = Buffer.alloc(length);
+        if (isLocalFile) {
+            fs.readSync(fd, buf, 0, length, offset);
+        } else {
+            buf.set(dataBuffer.subarray(offset, offset + length));
+        }
+        return buf;
+    }
+
+    const scanSize = Math.min(n, 65558);
+    const scanBuf = readBytes(n - scanSize, scanSize);
+
+    let eocd = -1;
+    for (let i = scanSize - 22; i >= 0; i--) {
+        if (scanBuf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    }
+
+    if (eocd === -1) { if (fd) fs.closeSync(fd); throw new Error("Not a ZIP file"); }
+
+    let cdCount = scanBuf.readUInt16LE(eocd + 8);
+    let cdOffset = scanBuf.readUInt32LE(eocd + 16);
+
+    for (let i = eocd - 20; i >= 0; i--) {
+        if (scanBuf.readUInt32LE(i) === 0x07064b50) {
+            const eocd64off = Number(scanBuf.readBigUInt64LE(i + 8));
+            const eocd64Buf = readBytes(eocd64off, 56);
+            if (eocd64Buf.readUInt32LE(0) === 0x06064b50) {
+                cdCount = Number(eocd64Buf.readBigUInt64LE(32));
+                cdOffset = Number(eocd64Buf.readBigUInt64LE(48));
+            }
+            break;
+        }
+    }
+
+    const cdSize = (n - scanSize + eocd) - cdOffset;
+    const cdBuf = readBytes(cdOffset, cdSize);
+
+    const files = {};
+    let pos = 0;
+    for (let i = 0; i < cdCount; i++) {
+        if (pos + 46 > cdSize || cdBuf.readUInt32LE(pos) !== 0x02014b50) break;
+        const compMethod = cdBuf.readUInt16LE(pos + 10);
+        const compSize = cdBuf.readUInt32LE(pos + 20);
+        let origSize = cdBuf.readUInt32LE(pos + 24);
+        const fnLen = cdBuf.readUInt16LE(pos + 28);
+        const exLen = cdBuf.readUInt16LE(pos + 30);
+        const cmLen = cdBuf.readUInt16LE(pos + 32);
+        let localHeaderOffset = cdBuf.readUInt32LE(pos + 42);
+
+        const fname = cdBuf.toString('utf-8', pos + 46, pos + 46 + fnLen);
+
+        if (origSize === 0xFFFFFFFF || localHeaderOffset === 0xFFFFFFFF) {
+            let ep = pos + 46 + fnLen;
+            const epEnd = ep + exLen;
+            while (ep + 4 <= epEnd) {
+                const tag = cdBuf.readUInt16LE(ep);
+                const sz = cdBuf.readUInt16LE(ep + 2);
+                if (tag === 0x0001 && sz >= 8) {
+                    let fieldPos = ep + 4;
+                    if (origSize === 0xFFFFFFFF) { origSize = Number(cdBuf.readBigUInt64LE(fieldPos)); fieldPos += 8; }
+                    if (compSize === 0xFFFFFFFF) { fieldPos += 8; }
+                    if (localHeaderOffset === 0xFFFFFFFF) { localHeaderOffset = Number(cdBuf.readBigUInt64LE(fieldPos)); }
+                    break;
+                }
+                ep += 4 + sz;
+            }
+        }
+
+        const lfhBuf = readBytes(localHeaderOffset, 30);
+        const lfhFnLen = lfhBuf.readUInt16LE(26);
+        const lfhExLen = lfhBuf.readUInt16LE(28);
+        const dataOffset = localHeaderOffset + 30 + lfhFnLen + lfhExLen;
+
+        files[fname] = {
+            origSize,
+            compMethod,
+            dataOffset,
+            compSize: (compSize === 0xFFFFFFFF && exLen > 0) ? undefined : compSize
+        };
+
+        pos += 46 + fnLen + exLen + cmLen;
+    }
+
+    if (fd) fs.closeSync(fd);
+    return files;
+}
+
 //Install dependencies
 // npm install gl-matrix fflate fzstd
 
@@ -904,40 +1006,70 @@ async function readTRX(url, urlIsLocalFile = false) {
   }
   // Parse the ZIP central directory ourselves: fflate's file.originalSize
   // returns 0xFFFFFFFF for ZIP64 entries instead of reading the ZIP64 extra field.
-  const sizeMap = getZip64OriginalSizes(data);
-  const decompressed = fflate.unzipSync(data, {
-    filter(file) {
-      return file.originalSize > 0;
-    }
-  });
-  var keys = Object.keys(decompressed);
+  const filesInfo = parseZipCentralDirectory(urlIsLocalFile ? url : data, urlIsLocalFile);
+
+  let fd = null;
+  if (urlIsLocalFile) {
+    fd = fs.openSync(url, 'r');
+  }
+
+  function readEntryData(fileInfo) {
+      if (fileInfo.compMethod === 0) {
+          const buffer = new ArrayBuffer(fileInfo.origSize);
+          const u8 = new Uint8Array(buffer);
+          if (urlIsLocalFile) {
+              const chunkSize = 512 * 1024 * 1024;
+              let bytesRead = 0;
+              while (bytesRead < fileInfo.origSize) {
+                  let readSize = Math.min(chunkSize, fileInfo.origSize - bytesRead);
+                  fs.readSync(fd, u8, bytesRead, readSize, fileInfo.dataOffset + bytesRead);
+                  bytesRead += readSize;
+              }
+          } else {
+              const src = new Uint8Array(data, fileInfo.dataOffset, fileInfo.origSize);
+              u8.set(src);
+          }
+          return u8;
+      } else if (fileInfo.compMethod === 8) {
+          const compSize = fileInfo.compSize || fileInfo.origSize;
+          const compressed = new Uint8Array(compSize);
+          if (urlIsLocalFile) {
+              fs.readSync(fd, compressed, 0, compSize, fileInfo.dataOffset);
+          } else {
+              const src = new Uint8Array(data, fileInfo.dataOffset, compSize);
+              compressed.set(src);
+          }
+          return fflate.inflateSync(compressed);
+      } else {
+          throw new Error("Unsupported compression method: " + fileInfo.compMethod);
+      }
+  }
+
+  var keys = Object.keys(filesInfo);
   for (var i = 0, len = keys.length; i < len; i++) {
-    let parts = keys[i].split("/");
-    let fname = parts.slice(-1)[0]; // my.trx/dpv/fx.float32 -> fx.float32
+    const key = keys[i];
+    let parts = key.split("/");
+    let fname = parts.slice(-1)[0];
     if (fname.startsWith(".")) continue;
-    let pname = parts.slice(-2)[0]; // my.trx/dpv/fx.float32 -> dpv
-    let tag = fname.split(".")[0]; // "positions.3.float16 -> "positions"
-    //todo: should tags be censored for invalide characters: https://stackoverflow.com/questions/8676011/which-characters-are-valid-invalid-in-a-json-key-name
-    let data = decompressed[keys[i]];
-    // Truncate to the size recorded in the ZIP central directory to work
-    // around a fflate ZIP64 bug where extra bytes from subsequent entries
-    // are appended to the decompressed output.
-    const correctByteLength = sizeMap[keys[i]];
-    if (correctByteLength !== undefined && data.byteLength > correctByteLength) {
-      data = data.slice(0, correctByteLength);
-    }
+    let pname = parts.slice(-2)[0];
+    let tag = fname.split(".")[0];
+
+    const fileInfo = filesInfo[key];
+    if (fileInfo.origSize === 0) continue;
+
     if (fname.includes("header.json")) {
-      let jsonString = new TextDecoder().decode(data);
-      // Strip UTF-8 BOM if present (some tools prepend \uFEFF)
+      const entryData = readEntryData(fileInfo);
+      let jsonString = new TextDecoder().decode(entryData);
       if (jsonString.charCodeAt(0) === 0xFEFF) jsonString = jsonString.slice(1);
       header = JSON.parse(jsonString.trim());
       continue;
     }
 
+    const entryData = readEntryData(fileInfo);
 
-    //next read arrays for all possible datatypes: int8/16/32/64 uint8/16/32/64 float16/32/64
     let nval = 0;
     let vals = [];
+    let data = entryData;
     if (fname.endsWith(".uint64") || fname.endsWith(".int64")) {
       nval = data.length / 8; //8 bytes per 64bit input
       vals = new Uint32Array(nval);
@@ -1441,8 +1573,7 @@ function saveTRX(filepath, obj, originalFilename, refHeader = null) {
         }
     }
 
-    const zipped = fflate.zipSync(zipObj, { level: 0 });
-    fs.writeFileSync(filepath, zipped);
+    writeZip64Sync(filepath, zipObj);
 }
 
 function readNiftiHeader(niftiPath) {
@@ -1541,4 +1672,183 @@ function readNiftiHeader(niftiPath) {
     }
 
     return { DIMENSIONS, VOXEL_TO_RASMM };
+}
+
+const crcTable = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    crcTable[i] = c;
+}
+
+function crc32(buffer, crc = 0) {
+    crc ^= -1;
+    for (let i = 0; i < buffer.length; i++) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ buffer[i]) & 0xFF];
+    }
+    return (crc ^ -1) >>> 0;
+}
+
+function writeZip64Sync(filepath, files) {
+    const fd = fs.openSync(filepath, 'w');
+    let offset = 0n; // Use BigInt for >4GB offsets
+    const centralDirectory = [];
+
+    for (const [filename, data] of Object.entries(files)) {
+        const nameBuf = Buffer.from(filename);
+        const nameLen = nameBuf.length;
+        const size = BigInt(data.byteLength || data.length);
+        const useZip64 = size >= 0xFFFFFFFFn || offset >= 0xFFFFFFFFn;
+        const dataU8 = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
+        const crc = crc32(dataU8);
+
+        // Write Local File Header
+        const lfhBuf = Buffer.alloc(30 + nameLen + (useZip64 ? 20 : 0));
+        lfhBuf.writeUInt32LE(0x04034b50, 0); // LFH signature
+        lfhBuf.writeUInt16LE(useZip64 ? 45 : 20, 4); // Version needed to extract
+        lfhBuf.writeUInt16LE(0, 6); // General purpose bit flag
+        lfhBuf.writeUInt16LE(0, 8); // Compression method (0 = stored)
+        lfhBuf.writeUInt16LE(0, 10); // Last mod file time
+        lfhBuf.writeUInt16LE(0, 12); // Last mod file date
+        lfhBuf.writeUInt32LE(crc, 14); // CRC-32
+
+        if (useZip64) {
+            lfhBuf.writeUInt32LE(0xFFFFFFFF, 18); // Compressed size
+            lfhBuf.writeUInt32LE(0xFFFFFFFF, 22); // Uncompressed size
+            lfhBuf.writeUInt16LE(nameLen, 26); // File name length
+            lfhBuf.writeUInt16LE(20, 28); // Extra field length
+            nameBuf.copy(lfhBuf, 30);
+
+            // ZIP64 Extra Field
+            lfhBuf.writeUInt16LE(0x0001, 30 + nameLen);
+            lfhBuf.writeUInt16LE(16, 32 + nameLen);
+            lfhBuf.writeBigUInt64LE(size, 34 + nameLen); // Uncompressed size
+            lfhBuf.writeBigUInt64LE(size, 42 + nameLen); // Compressed size
+        } else {
+            lfhBuf.writeUInt32LE(Number(size), 18); // Compressed size
+            lfhBuf.writeUInt32LE(Number(size), 22); // Uncompressed size
+            lfhBuf.writeUInt16LE(nameLen, 26); // File name length
+            lfhBuf.writeUInt16LE(0, 28); // Extra field length
+            nameBuf.copy(lfhBuf, 30);
+        }
+
+        fs.writeSync(fd, lfhBuf);
+
+        // Write file data chunk by chunk to avoid large buffer instantiation during fs.writeSync
+        const CHUNK_SIZE = 512 * 1024 * 1024; // 512 MB chunk
+        let bytesWritten = 0;
+
+        while (bytesWritten < dataU8.length) {
+            let writeSize = Math.min(CHUNK_SIZE, dataU8.length - bytesWritten);
+            fs.writeSync(fd, dataU8, bytesWritten, writeSize);
+            bytesWritten += writeSize;
+        }
+
+        centralDirectory.push({
+            filename: nameBuf,
+            size: size,
+            offset: offset,
+            crc: crc
+        });
+
+        offset += BigInt(lfhBuf.length) + size;
+    }
+
+    const cdStart = offset;
+    let cdSize = 0n;
+
+    for (const file of centralDirectory) {
+        const nameLen = file.filename.length;
+        const useZip64 = file.size >= 0xFFFFFFFFn || file.offset >= 0xFFFFFFFFn;
+
+        let extraFieldLength = 0;
+        if (useZip64) {
+            extraFieldLength += 4;
+            if (file.size >= 0xFFFFFFFFn) extraFieldLength += 16;
+            if (file.offset >= 0xFFFFFFFFn) extraFieldLength += 8;
+        }
+
+        const cdBuf = Buffer.alloc(46 + nameLen + extraFieldLength);
+        cdBuf.writeUInt32LE(0x02014b50, 0); // CD signature
+        cdBuf.writeUInt16LE(45, 4); // Version made by
+        cdBuf.writeUInt16LE(useZip64 ? 45 : 20, 6); // Version needed to extract
+        cdBuf.writeUInt16LE(0, 8); // General purpose bit flag
+        cdBuf.writeUInt16LE(0, 10); // Compression method
+        cdBuf.writeUInt16LE(0, 12); // Last mod file time
+        cdBuf.writeUInt16LE(0, 14); // Last mod file date
+        cdBuf.writeUInt32LE(file.crc, 16); // CRC-32
+
+        cdBuf.writeUInt32LE(file.size >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.size), 20); // Compressed size
+        cdBuf.writeUInt32LE(file.size >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.size), 24); // Uncompressed size
+        cdBuf.writeUInt16LE(nameLen, 28); // File name length
+        cdBuf.writeUInt16LE(extraFieldLength, 30); // Extra field length
+        cdBuf.writeUInt16LE(0, 32); // File comment length
+        cdBuf.writeUInt16LE(0, 34); // Disk number start
+        cdBuf.writeUInt16LE(0, 36); // Internal file attributes
+        cdBuf.writeUInt32LE(0, 38); // External file attributes
+        cdBuf.writeUInt32LE(file.offset >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.offset), 42); // Relative offset of LFH
+
+        file.filename.copy(cdBuf, 46);
+
+        if (useZip64) {
+            let pos = 46 + nameLen;
+            cdBuf.writeUInt16LE(0x0001, pos); // Tag
+            cdBuf.writeUInt16LE(extraFieldLength - 4, pos + 2); // Size
+            pos += 4;
+            if (file.size >= 0xFFFFFFFFn) {
+                cdBuf.writeBigUInt64LE(file.size, pos);
+                cdBuf.writeBigUInt64LE(file.size, pos + 8);
+                pos += 16;
+            }
+            if (file.offset >= 0xFFFFFFFFn) {
+                cdBuf.writeBigUInt64LE(file.offset, pos);
+            }
+        }
+
+        fs.writeSync(fd, cdBuf);
+        cdSize += BigInt(cdBuf.length);
+    }
+
+    const totalEntries = BigInt(centralDirectory.length);
+    const useZip64Eocd = totalEntries >= 0xFFFFn || cdStart >= 0xFFFFFFFFn || cdSize >= 0xFFFFFFFFn;
+
+    if (useZip64Eocd) {
+        // ZIP64 EOCD
+        const eocd64Buf = Buffer.alloc(56);
+        eocd64Buf.writeUInt32LE(0x06064b50, 0); // ZIP64 EOCD signature
+        eocd64Buf.writeBigUInt64LE(44n, 4); // Size of ZIP64 EOCD record
+        eocd64Buf.writeUInt16LE(45, 12); // Version made by
+        eocd64Buf.writeUInt16LE(45, 14); // Version needed to extract
+        eocd64Buf.writeUInt32LE(0, 16); // Number of this disk
+        eocd64Buf.writeUInt32LE(0, 20); // Disk where CD starts
+        eocd64Buf.writeBigUInt64LE(totalEntries, 24); // Number of CD records on this disk
+        eocd64Buf.writeBigUInt64LE(totalEntries, 32); // Total number of CD records
+        eocd64Buf.writeBigUInt64LE(cdSize, 40); // Size of CD
+        eocd64Buf.writeBigUInt64LE(cdStart, 48); // Offset of start of CD
+        fs.writeSync(fd, eocd64Buf);
+
+        // ZIP64 EOCD Locator
+        const locBuf = Buffer.alloc(20);
+        locBuf.writeUInt32LE(0x07064b50, 0); // ZIP64 EOCD locator signature
+        locBuf.writeUInt32LE(0, 4); // Number of the disk with the start of the zip64 end of central directory
+        locBuf.writeBigUInt64LE(offset + cdSize, 8); // Relative offset of the zip64 end of central directory record
+        locBuf.writeUInt32LE(1, 16); // Total number of disks
+        fs.writeSync(fd, locBuf);
+    }
+
+    // Standard EOCD
+    const eocdBuf = Buffer.alloc(22);
+    eocdBuf.writeUInt32LE(0x06054b50, 0); // EOCD signature
+    eocdBuf.writeUInt16LE(0, 4); // Number of this disk
+    eocdBuf.writeUInt16LE(0, 6); // Disk where CD starts
+    eocdBuf.writeUInt16LE(totalEntries >= 0xFFFFn ? 0xFFFF : Number(totalEntries), 8); // Number of CD records on this disk
+    eocdBuf.writeUInt16LE(totalEntries >= 0xFFFFn ? 0xFFFF : Number(totalEntries), 10); // Total number of CD records
+    eocdBuf.writeUInt32LE(cdSize >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdSize), 12); // Size of CD
+    eocdBuf.writeUInt32LE(cdStart >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdStart), 16); // Offset of start of CD
+    eocdBuf.writeUInt16LE(0, 20); // ZIP file comment length
+    fs.writeSync(fd, eocdBuf);
+
+    fs.closeSync(fd);
 }
