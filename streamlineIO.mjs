@@ -398,6 +398,12 @@ function readTRK(buffer) {
 
   let offsetPt0 = new Uint32Array(num_streamlines + 1);
   let pts = new Float32Array(num_points * 3);
+  if (n_scalars > 0) {
+    for (let s = 0; s < n_scalars; s++) dpv[s].vals = new Float32Array(num_points);
+  }
+  if (n_properties > 0) {
+    for (let j = 0; j < n_properties; j++) dps[j].vals = new Float32Array(num_streamlines);
+  }
 
   w = 0;
   let npt = 0;
@@ -430,7 +436,7 @@ function readTRK(buffer) {
           vox2mmMat[11];
       if (n_scalars > 0) {
         for (let s = 0; s < n_scalars; s++) {
-          dpv[s].vals.push(dataView.getFloat32(w * 4, true));
+          dpv[s].vals[npt] = dataView.getFloat32(w * 4, true);
           w++;
         }
       }
@@ -438,7 +444,7 @@ function readTRK(buffer) {
     } // for j: each point in streamline
     if (n_properties > 0) {
       for (let j = 0; j < n_properties; j++) {
-        dps[j].vals.push(dataView.getFloat32(w * 4, true));
+        dps[j].vals[noffset - 1] = dataView.getFloat32(w * 4, true);
         w++;
       }
     }
@@ -1573,7 +1579,20 @@ function saveTRX(filepath, obj, originalFilename, refHeader = null) {
         }
     }
 
-    writeZip64Sync(filepath, zipObj);
+    if (typeof window === "undefined") {
+        // NodeJS
+        writeZip64Sync(filepath, zipObj);
+    } else {
+        // Browser
+        const zipped = fflate.zipSync(zipObj, { level: 0 });
+        const blob = new Blob([zipped], { type: "application/zip" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filepath.split("/").pop();
+        a.click();
+        URL.revokeObjectURL(url);
+    }
 }
 
 function readNiftiHeader(niftiPath) {
