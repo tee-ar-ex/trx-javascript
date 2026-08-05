@@ -5,6 +5,114 @@ import * as fflate from "fflate";
 import * as fzstd from "fzstd"; //https://github.com/101arrowz/fzstd
 import { crc32 as nativeCrc32 } from "node:zlib";
 
+// ---------------------------------------------------------------------------
+// Minimal one-sided Jacobi SVD for 3×3 real matrices.
+// Returns { U, S, Vt } such that A ≈ U * diag(S) * Vt
+// Used by axcodesFromAffine to replicate nibabel's io_orientation approach.
+// ---------------------------------------------------------------------------
+function _matMul3(A, B) {
+    const C = [[0,0,0],[0,0,0],[0,0,0]];
+    for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+            for (let k = 0; k < 3; k++)
+                C[i][j] += A[i][k] * B[k][j];
+    return C;
+}
+
+function _svd3(A) {
+    // One-sided Jacobi SVD: iteratively zero off-diagonal elements of A^T A
+    // via Givens rotations applied to the right (accumulating into Vt).
+    const Vt = [[1,0,0],[0,1,0],[0,0,1]];
+    const B  = A.map(r => [...r]);   // working copy
+
+    for (let iter = 0; iter < 20; iter++) {
+        let changed = false;
+        for (let p = 0; p < 2; p++) {
+            for (let q = p + 1; q < 3; q++) {
+                let bpp = 0, bqq = 0, bpq = 0;
+                for (let k = 0; k < 3; k++) {
+                    bpp += B[k][p] * B[k][p];
+                    bqq += B[k][q] * B[k][q];
+                    bpq += B[k][p] * B[k][q];
+                }
+                if (Math.abs(bpq) < 1e-14 * Math.sqrt(bpp * bqq + 1e-300)) continue;
+                changed = true;
+                const tau = (bqq - bpp) / (2 * bpq);
+                const t   = Math.sign(tau) / (Math.abs(tau) + Math.sqrt(1 + tau * tau));
+                const c   = 1 / Math.sqrt(1 + t * t);
+                const s   = t * c;
+                // Apply Givens rotation to columns p,q of B
+                for (let k = 0; k < 3; k++) {
+                    const bp = B[k][p], bq = B[k][q];
+                    B[k][p] =  c * bp + s * bq;
+                    B[k][q] = -s * bp + c * bq;
+                }
+                // Accumulate rotation into Vt (rows of Vt = columns of V)
+                for (let k = 0; k < 3; k++) {
+                    const vp = Vt[p][k], vq = Vt[q][k];
+                    Vt[p][k] =  c * vp + s * vq;
+                    Vt[q][k] = -s * vp + c * vq;
+                }
+            }
+        }
+        if (!changed) break;
+    }
+
+    // Singular values = column norms of B; U = columns of B normalised
+    const U = [[0,0,0],[0,0,0],[0,0,0]];
+    const S = [0, 0, 0];
+    for (let j = 0; j < 3; j++) {
+        let norm = 0;
+        for (let i = 0; i < 3; i++) norm += B[i][j] * B[i][j];
+        norm = Math.sqrt(norm);
+        S[j] = norm;
+        for (let i = 0; i < 3; i++)
+            U[i][j] = norm > 0 ? B[i][j] / norm : (i === j ? 1 : 0);
+    }
+    return { U, S, Vt };   // A ≈ U * diag(S) * Vt
+}
+
+/**
+ * Derive the 3-character voxel_order string from a 4×4 affine (row-major
+ * nested array), replicating nibabel.aff2axcodes / io_orientation exactly:
+ *   1. Normalize columns of the 3×3 block by their L2 norm.
+ *   2. SVD → R = U * Vt  (closest pure rotation, polar decomposition).
+ *   3. Per-column argmax(|R|) with axis exclusion.
+ */
+function axcodesFromAffine(aff) {
+    const POS = ['R', 'A', 'S'];
+    const NEG = ['L', 'P', 'I'];
+
+    // Step 1: column-normalised 3×3 block
+    const rs = [[0,0,0],[0,0,0],[0,0,0]];
+    for (let col = 0; col < 3; col++) {
+        let norm = 0;
+        for (let row = 0; row < 3; row++) norm += aff[row][col] ** 2;
+        norm = Math.sqrt(norm) || 1;
+        for (let row = 0; row < 3; row++) rs[row][col] = aff[row][col] / norm;
+    }
+
+    // Step 2: R = U * Vt
+    const { U, Vt } = _svd3(rs);
+    const R = _matMul3(U, Vt);
+
+    // Step 3: argmax per column with axis exclusion
+    const used = [false, false, false];
+    let result = '';
+    for (let col = 0; col < 3; col++) {
+        let bestRow = 0, bestVal = -1;
+        for (let row = 0; row < 3; row++) {
+            if (!used[row] && Math.abs(R[row][col]) > bestVal) {
+                bestVal = Math.abs(R[row][col]);
+                bestRow = row;
+            }
+        }
+        used[bestRow] = true;
+        result += R[bestRow][col] >= 0 ? POS[bestRow] : NEG[bestRow];
+    }
+    return result;
+}
+
 function parseZipCentralDirectory(dataOrPath, isLocalFile) {
     let fd = null;
     let n = 0;
@@ -749,13 +857,15 @@ function readVTK (buffer) {
     let posOK = pos;
     line = readStr(); //borked files "OFFSETS vtktypeint64"
     if (line.startsWith("OFFSETS")) {
-      //console.log("invalid VTK file created by DiPy");
+      let offset_items = line.trim().split(/\s+/);
+      let num_offsets = parseInt(offset_items[2]);
       let isInt64 = false;
       if (line.includes("int64")) isInt64 = true;
-      let offsetPt0 = new Uint32Array(n_count + 1);
+
+      let offsetPt0 = new Uint32Array(num_offsets);
       if (isInt64) {
         let isOverflowInt32 = false;
-        for (let c = 0; c <= n_count; c++) {
+        for (let c = 0; c < num_offsets; c++) {
           let idx = reader.getInt32(pos, false);
           if (idx !== 0) isOverflowInt32 = true;
           pos += 4;
@@ -766,7 +876,7 @@ function readVTK (buffer) {
         if (isOverflowInt32)
           console.log("int32 overflow: JavaScript does not support int64");
       } else {
-        for (let c = 0; c <= n_count; c++) {
+        for (let c = 0; c < num_offsets; c++) {
           let idx = reader.getInt32(pos, false);
           pos += 4;
           offsetPt0[c] = idx;
@@ -1289,7 +1399,7 @@ function saveTRK(filepath, obj, originalFilename, refHeader = null) {
     const view = new DataView(headerBytes.buffer);
 
     headerBytes.set([84, 82, 65, 67, 75], 0); // 'TRACK'
-    headerBytes.set([82, 65, 83, 0], 948);     // 'RAS\0' voxel_order
+    // voxel_order written after resolvedHeader is loaded (see below)
 
     let dim = [256, 256, 256];
     let voxelSize = [1, 1, 1];
@@ -1310,6 +1420,10 @@ function saveTRK(filepath, obj, originalFilename, refHeader = null) {
         Math.sqrt(voxToRas[0][1]**2 + voxToRas[1][1]**2 + voxToRas[2][1]**2),
         Math.sqrt(voxToRas[0][2]**2 + voxToRas[1][2]**2 + voxToRas[2][2]**2)
     ];
+
+    // Derive voxel_order from the affine (mirrors nibabel.aff2axcodes / io_orientation)
+    const _order = axcodesFromAffine(voxToRas);
+    headerBytes.set([_order.charCodeAt(0), _order.charCodeAt(1), _order.charCodeAt(2), 0], 948);
 
     view.setInt16(6, dim[0], true);
     view.setInt16(8, dim[1], true);
