@@ -857,37 +857,44 @@ function readVTK (buffer) {
     let posOK = pos;
     line = readStr(); //borked files "OFFSETS vtktypeint64"
     if (line.startsWith("OFFSETS")) {
-      let offset_items = line.trim().split(/\s+/);
-      let num_offsets = parseInt(offset_items[2]);
-      let isInt64 = false;
-      if (line.includes("int64")) isInt64 = true;
+        let offset_items = line.trim().split(/\s+/);
+        let num_offsets;
+        
+        if (offset_items.length >= 3) {
+            num_offsets = parseInt(offset_items[2]);
+        } else {
+            num_offsets = n_count;
+        }
 
-      let offsetPt0 = new Uint32Array(num_offsets);
-      if (isInt64) {
-        let isOverflowInt32 = false;
-        for (let c = 0; c < num_offsets; c++) {
-          let idx = reader.getInt32(pos, false);
-          if (idx !== 0) isOverflowInt32 = true;
-          pos += 4;
-          idx = reader.getInt32(pos, false);
-          pos += 4;
-          offsetPt0[c] = idx;
+        let isInt64 = false;
+        if (line.includes("int64")) isInt64 = true;
+
+        let offsetPt0 = new Uint32Array(num_offsets);
+        if (isInt64) {
+          let isOverflowInt32 = false;
+          for (let c = 0; c < num_offsets; c++) {
+            let idx = reader.getInt32(pos, false);
+            if (idx !== 0) isOverflowInt32 = true;
+            pos += 4;
+            idx = reader.getInt32(pos, false);
+            pos += 4;
+            offsetPt0[c] = idx;
+          }
+          if (isOverflowInt32)
+            console.log("int32 overflow: JavaScript does not support int64");
+        } else {
+          for (let c = 0; c < num_offsets; c++) {
+            let idx = reader.getInt32(pos, false);
+            pos += 4;
+            offsetPt0[c] = idx;
+          }
         }
-        if (isOverflowInt32)
-          console.log("int32 overflow: JavaScript does not support int64");
-      } else {
-        for (let c = 0; c < num_offsets; c++) {
-          let idx = reader.getInt32(pos, false);
-          pos += 4;
-          offsetPt0[c] = idx;
-        }
+        let pts = positions;
+        return {
+          pts,
+          offsetPt0,
+        };
       }
-      let pts = positions;
-      return {
-        pts,
-        offsetPt0,
-      };
-    }
     pos = posOK; //valid VTK file
     let npt = 0;
     let offsetPt0 = [];
