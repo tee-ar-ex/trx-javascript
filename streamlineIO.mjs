@@ -118,6 +118,7 @@ import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
 import * as fs from "fs";
 import * as fflate from "fflate";
 import * as fzstd from 'fzstd'; //https://github.com/101arrowz/fzstd
+import { crc32 as nativeCrc32 } from "node:zlib";
 
 function alert(str) { //for node.js which does not have a GUI alert
   console.log(str);
@@ -534,8 +535,8 @@ function readTCK(buffer) {
     }
   }
   //resize offset/vertex arrays that were initially over-provisioned
-  pts = pts.slice(0, npt3);
-  offsetPt0 = offsetPt0.slice(0, noffset); 
+  pts = pts.subarray(0, npt3);
+  offsetPt0 = offsetPt0.subarray(0, noffset); 
   return {
     pts,
     offsetPt0,
@@ -752,10 +753,10 @@ function readVTK (buffer) {
       //console.log("invalid VTK file created by DiPy");
       let isInt64 = false;
       if (line.includes("int64")) isInt64 = true;
-      let offsetPt0 = new Uint32Array(n_count);
+      let offsetPt0 = new Uint32Array(n_count + 1);
       if (isInt64) {
         let isOverflowInt32 = false;
-        for (let c = 0; c < n_count; c++) {
+        for (let c = 0; c <= n_count; c++) {
           let idx = reader.getInt32(pos, false);
           if (idx !== 0) isOverflowInt32 = true;
           pos += 4;
@@ -766,7 +767,7 @@ function readVTK (buffer) {
         if (isOverflowInt32)
           console.log("int32 overflow: JavaScript does not support int64");
       } else {
-        for (let c = 0; c < n_count; c++) {
+        for (let c = 0; c <= n_count; c++) {
           let idx = reader.getInt32(pos, false);
           pos += 4;
           offsetPt0[c] = idx;
@@ -1118,7 +1119,7 @@ async function readTRX(url, urlIsLocalFile = false) {
       dpg.push({
         id: groupId + "/" + tag, // e.g. "AF_R/volume"
         fname: parts.slice(dpgIndex + 1).join("/"), // e.g. "AF_R/volume.uint32"
-        vals: vals.slice(),
+        vals: vals,
       });
       continue;
     }
@@ -1127,7 +1128,7 @@ async function readTRX(url, urlIsLocalFile = false) {
       groups.push({
         id: tag,
         fname: fname,
-        vals: vals.slice(),
+        vals: vals,
       });
       continue;
     }
@@ -1136,7 +1137,7 @@ async function readTRX(url, urlIsLocalFile = false) {
       dpv.push({
         id: tag,
         fname: fname,
-        vals: vals.slice(),
+        vals: vals,
       });
       continue;
     }
@@ -1145,7 +1146,7 @@ async function readTRX(url, urlIsLocalFile = false) {
       dps.push({
         id: tag,
         fname: fname,
-        vals: vals.slice(),
+        vals: vals,
       });
       continue;
     }
@@ -1159,7 +1160,7 @@ async function readTRX(url, urlIsLocalFile = false) {
     }
     if (fname.startsWith("positions.3.")) {
       npt = nval; //4 bytes per 32bit input
-      pts = vals.slice();
+      pts = vals;
       if (fname.endsWith(".float64")) positions_dtype = "float64";
       else if (fname.endsWith(".float16")) positions_dtype = "float16";
       else positions_dtype = "float32";
@@ -1170,7 +1171,7 @@ async function readTRX(url, urlIsLocalFile = false) {
     alert("Too many vertices: JavaScript does not support 64 bit integers");
 
   if (offsetPt0[noff - 1] === npt / 3) {
-    offsetPt0 = offsetPt0.slice(0, noff);
+    offsetPt0 = offsetPt0.subarray(0, noff);
   } else {
     offsetPt0[noff] = npt / 3; //solve fence post problem, offset for final streamline
   }
@@ -1475,7 +1476,7 @@ function saveVTK(filepath, obj) {
     fs.closeSync(fd);
 }
 
-function saveTRX(filepath, obj, originalFilename, refHeader = null) {
+async function saveTRX(filepath, obj, originalFilename, refHeader = null) {
     let dtype = obj.positions_dtype || "float32";
     let ptsData = obj.pts;
     if (ptsData instanceof Float64Array) {
@@ -1581,7 +1582,7 @@ function saveTRX(filepath, obj, originalFilename, refHeader = null) {
 
     if (typeof window === "undefined") {
         // NodeJS
-        writeZip64Sync(filepath, zipObj);
+        return await writeZip64Stream(filepath, zipObj);
     } else {
         // Browser
         const zipped = fflate.zipSync(zipObj, { level: 0 });
@@ -1693,25 +1694,26 @@ function readNiftiHeader(niftiPath) {
     return { DIMENSIONS, VOXEL_TO_RASMM };
 }
 
-const crcTable = new Uint32Array(256);
-for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let j = 0; j < 8; j++) {
-        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    }
-    crcTable[i] = c;
-}
+async function writeZip64Stream(filepath, files) {
+    const writeStream = fs.createWriteStream(filepath, { highWaterMark: 4 * 1024 * 1024 });
 
-function crc32(buffer, crc = 0) {
-    crc ^= -1;
-    for (let i = 0; i < buffer.length; i++) {
-        crc = (crc >>> 8) ^ crcTable[(crc ^ buffer[i]) & 0xFF];
+    async function writeChunk(buf) {
+        if (!writeStream.write(buf)) {
+            await new Promise((resolve, reject) => {
+                const onDrain = () => {
+                    writeStream.off('error', onError);
+                    resolve();
+                };
+                const onError = (err) => {
+                    writeStream.off('drain', onDrain);
+                    reject(err);
+                };
+                writeStream.once('drain', onDrain);
+                writeStream.once('error', onError);
+            });
+        }
     }
-    return (crc ^ -1) >>> 0;
-}
 
-function writeZip64Sync(filepath, files) {
-    const fd = fs.openSync(filepath, 'w');
     let offset = 0n; // Use BigInt for >4GB offsets
     const centralDirectory = [];
 
@@ -1721,7 +1723,7 @@ function writeZip64Sync(filepath, files) {
         const size = BigInt(data.byteLength || data.length);
         const useZip64 = size >= 0xFFFFFFFFn || offset >= 0xFFFFFFFFn;
         const dataU8 = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
-        const crc = crc32(dataU8);
+        const crc = nativeCrc32(dataU8);
 
         // Write Local File Header
         const lfhBuf = Buffer.alloc(30 + nameLen + (useZip64 ? 20 : 0));
@@ -1753,16 +1755,15 @@ function writeZip64Sync(filepath, files) {
             nameBuf.copy(lfhBuf, 30);
         }
 
-        fs.writeSync(fd, lfhBuf);
+        await writeChunk(lfhBuf);
 
-        // Write file data chunk by chunk to avoid large buffer instantiation during fs.writeSync
-        const CHUNK_SIZE = 512 * 1024 * 1024; // 512 MB chunk
-        let bytesWritten = 0;
-
-        while (bytesWritten < dataU8.length) {
-            let writeSize = Math.min(CHUNK_SIZE, dataU8.length - bytesWritten);
-            fs.writeSync(fd, dataU8, bytesWritten, writeSize);
-            bytesWritten += writeSize;
+        // Write file data chunk by chunk (4 MB chunks)
+        const CHUNK_SIZE = 4 * 1024 * 1024;
+        let pos = 0;
+        while (pos < dataU8.length) {
+            const end = Math.min(pos + CHUNK_SIZE, dataU8.length);
+            await writeChunk(dataU8.subarray(pos, end));
+            pos = end;
         }
 
         centralDirectory.push({
@@ -1826,7 +1827,7 @@ function writeZip64Sync(filepath, files) {
             }
         }
 
-        fs.writeSync(fd, cdBuf);
+        await writeChunk(cdBuf);
         cdSize += BigInt(cdBuf.length);
     }
 
@@ -1846,7 +1847,7 @@ function writeZip64Sync(filepath, files) {
         eocd64Buf.writeBigUInt64LE(totalEntries, 32); // Total number of CD records
         eocd64Buf.writeBigUInt64LE(cdSize, 40); // Size of CD
         eocd64Buf.writeBigUInt64LE(cdStart, 48); // Offset of start of CD
-        fs.writeSync(fd, eocd64Buf);
+        await writeChunk(eocd64Buf);
 
         // ZIP64 EOCD Locator
         const locBuf = Buffer.alloc(20);
@@ -1854,7 +1855,7 @@ function writeZip64Sync(filepath, files) {
         locBuf.writeUInt32LE(0, 4); // Number of the disk with the start of the zip64 end of central directory
         locBuf.writeBigUInt64LE(offset + cdSize, 8); // Relative offset of the zip64 end of central directory record
         locBuf.writeUInt32LE(1, 16); // Total number of disks
-        fs.writeSync(fd, locBuf);
+        await writeChunk(locBuf);
     }
 
     // Standard EOCD
@@ -1867,7 +1868,11 @@ function writeZip64Sync(filepath, files) {
     eocdBuf.writeUInt32LE(cdSize >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdSize), 12); // Size of CD
     eocdBuf.writeUInt32LE(cdStart >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdStart), 16); // Offset of start of CD
     eocdBuf.writeUInt16LE(0, 20); // ZIP file comment length
-    fs.writeSync(fd, eocdBuf);
+    await writeChunk(eocdBuf);
 
-    fs.closeSync(fd);
+    await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        writeStream.end();
+    });
 }
