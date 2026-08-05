@@ -16,7 +16,7 @@ async function main() {
     //check input filename
     let fnm = argv[0];
     if (!fs.existsSync(fnm)) {
-        console.log("Unable to find NIfTI: " + fnm);
+        console.log("Unable to find file: " + fnm);
         return
     }
     let re = /(?:\.([^.]+))?$/;

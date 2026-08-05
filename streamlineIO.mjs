@@ -1,4 +1,10 @@
 
+import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
+import * as fs from "fs";
+import * as fflate from "fflate";
+import * as fzstd from "fzstd"; //https://github.com/101arrowz/fzstd
+import { crc32 as nativeCrc32 } from "node:zlib";
+
 function parseZipCentralDirectory(dataOrPath, isLocalFile) {
     let fd = null;
     let n = 0;
@@ -113,17 +119,7 @@ function parseZipCentralDirectory(dataOrPath, isLocalFile) {
  * @property {Object} [header] - Parsed header.json contents (TRX only).
  */
 
-export { readTRK, readTCK, readVTK, readTRX, readTT, saveTCK, saveTRK, saveVTK, saveTRX, readNiftiHeader };
-import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
-import * as fs from "fs";
-import * as fflate from "fflate";
-import * as fzstd from 'fzstd'; //https://github.com/101arrowz/fzstd
-import { crc32 as nativeCrc32 } from "node:zlib";
 
-function alert(str) { //for node.js which does not have a GUI alert
-  console.log(str);
-  process.exit()
-}
 
 //Read a Matlab V4 file, n.b. does not support modern versions
 //https://www.mathworks.com/help/pdf_doc/matlab/matfile_format.pdf
@@ -276,12 +272,15 @@ function readTT(buffer) {
     let vox2mmMat = mat4.create()
     mat4.mul(vox2mmMat, zoomMat, trans_to_mni)
     let v = 0
-    for (let i = 0; i < npt / 3; i++) {
-      const pos = vec4.fromValues(pts[v], pts[v+1], pts[v+2], 1)
-      vec4.transformMat4(pos, pos, vox2mmMat)
-      pts[v++] = pos[0]
-      pts[v++] = pos[1]
-      pts[v++] = pos[2]
+    {
+      const pos = vec4.create()
+      for (let i = 0; i < npt / 3; i++) {
+        vec4.set(pos, pts[v], pts[v + 1], pts[v + 2], 1)
+        vec4.transformMat4(pos, pos, vox2mmMat)
+        pts[v++] = pos[0]
+        pts[v++] = pos[1]
+        pts[v++] = pos[2]
+      }
     }
     offsetPt0[pos.length] = npt / 3; //solve fence post problem, offset for final streamline
   } // parse_tt()
@@ -549,14 +548,14 @@ function readTxtVTK(buffer) {
   var lines = txt.split("\n");
   var n = lines.length;
   if (n < 7 || !lines[0].startsWith("# vtk DataFile"))
-    alert("Invalid VTK image");
-  if (!lines[2].startsWith("ASCII")) alert("Not ASCII VTK mesh");
+    throw new Error("Invalid VTK image");
+  if (!lines[2].startsWith("ASCII")) throw new Error("Not ASCII VTK mesh");
   let pos = 3;
   while (lines[pos].length < 1) pos++; //skip blank lines
-  if (!lines[pos].includes("POLYDATA")) alert("Not ASCII VTK polydata");
+  if (!lines[pos].includes("POLYDATA")) throw new Error("Not ASCII VTK polydata");
   pos++;
   while (lines[pos].length < 1) pos++; //skip blank lines
-  if (!lines[pos].startsWith("POINTS")) alert("Not VTK POINTS");
+  if (!lines[pos].startsWith("POINTS")) throw new Error("Not VTK POINTS");
   let items = lines[pos].split(" ");
   let nvert = parseInt(items[1]); //POINTS 10261 float
   let nvert3 = nvert * 3;
@@ -579,7 +578,7 @@ function readTxtVTK(buffer) {
   pos++;
   if (items[0].includes("LINES")) {
     let n_count = parseInt(items[1]);
-    if (n_count < 1) alert("Corrupted VTK ASCII");
+    if (n_count < 1) throw new Error("Corrupted VTK ASCII");
     let str = lines[pos].trim();
     let offsetPt0 = [];
     let pts = [];
@@ -675,7 +674,7 @@ function readTxtVTK(buffer) {
         fy = fz;
       }
     }
-  } else alert("Unsupported ASCII VTK datatype " + items[0]);
+  } else throw new Error("Unsupported ASCII VTK datatype " + items[0]);
   var indices = new Int32Array(tris);
   return {
     positions,
@@ -710,14 +709,14 @@ function readVTK (buffer) {
     return new TextDecoder().decode(buffer.slice(startPos, pos - 1));
   }
   let line = readStr(); //1st line: signature
-  if (!line.startsWith("# vtk DataFile")) alert("Invalid VTK mesh");
+  if (!line.startsWith("# vtk DataFile")) throw new Error("Invalid VTK mesh");
   line = readStr(); //2nd line comment
   line = readStr(); //3rd line ASCII/BINARY
   if (line.startsWith("ASCII")) return readTxtVTK(buffer); //from NiiVue
   else if (!line.startsWith("BINARY"))
-    alert("Invalid VTK image, expected ASCII or BINARY", line);
+    throw new Error("Invalid VTK image, expected ASCII or BINARY: " + line);
   line = readStr(); //5th line "DATASET POLYDATA"
-  if (!line.includes("POLYDATA")) alert("Only able to read VTK POLYDATA", line);
+  if (!line.includes("POLYDATA")) throw new Error("Only able to read VTK POLYDATA: " + line);
   line = readStr(); //6th line "POINTS 10261 float"
   if (
     !line.includes("POINTS") ||
@@ -746,7 +745,7 @@ function readVTK (buffer) {
   let tris = [];
   if (items[0].includes("LINES")) {
     let n_count = parseInt(items[1]);
-    //tractogaphy data: detect if borked by DiPy
+    //tractography data: detect if borked by DiPy
     let posOK = pos;
     line = readStr(); //borked files "OFFSETS vtktypeint64"
     if (line.startsWith("OFFSETS")) {
@@ -839,7 +838,7 @@ function readVTK (buffer) {
         fy = fz;
       } //for each triangle
     } //for each polygon
-  } else alert("Unsupported ASCII VTK datatype ", items[0]);
+  } else throw new Error("Unsupported ASCII VTK datatype " + items[0]);
   var indices = new Int32Array(tris);
   return {
     positions,
@@ -1166,9 +1165,8 @@ async function readTRX(url, urlIsLocalFile = false) {
       else positions_dtype = "float32";
     }
   }
-  if (noff === 0 || npt === 0) alert("Failure reading TRX format");
   if (isOverflowUint64)
-    alert("Too many vertices: JavaScript does not support 64 bit integers");
+    throw new Error("Too many vertices: JavaScript does not support 64 bit integers");
 
   if (offsetPt0[noff - 1] === npt / 3) {
     offsetPt0 = offsetPt0.subarray(0, noff);
@@ -1483,10 +1481,10 @@ async function saveTRX(filepath, obj, originalFilename, refHeader = null) {
         dtype = "float64";
     }
 
-    if (originalFilename.includes("f16") || dtype === "float16") {
+    if ((originalFilename && originalFilename.includes("f16")) || dtype === "float16") {
         dtype = "float16";
         ptsData = float32ToFloat16(obj.pts);
-    } else if (originalFilename.includes("f64")) {
+    } else if (originalFilename && originalFilename.includes("f64")) {
         dtype = "float64";
         ptsData = new Float64Array(obj.pts);
     }
@@ -1516,8 +1514,8 @@ async function saveTRX(filepath, obj, originalFilename, refHeader = null) {
     zipObj[`positions.3.${dtype}`] = new Uint8Array(ptsData.buffer, ptsData.byteOffset, ptsData.byteLength);
     
     let offsetDtype = "uint32";
-    let offsetData = obj.offsetPt0.subarray(0, numStreamlines + 1);
-    if (originalFilename.includes("ui64")) {
+    let offsetData = obj.offsetPt0.subarray ? obj.offsetPt0.subarray(0, numStreamlines + 1) : obj.offsetPt0.slice(0, numStreamlines + 1);
+    if (originalFilename && originalFilename.includes("ui64")) {
         offsetDtype = "uint64";
         const u64Bytes = new Uint8Array((numStreamlines + 1) * 8);
         const view = new DataView(u64Bytes.buffer);
@@ -1876,3 +1874,5 @@ async function writeZip64Stream(filepath, files) {
         writeStream.end();
     });
 }
+
+export { readTRK, readTCK, readVTK, readTRX, readTT, saveTCK, saveTRK, saveVTK, saveTRX, readNiftiHeader };
