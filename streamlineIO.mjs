@@ -1833,14 +1833,14 @@ async function writeZip64Stream(filepath, files) {
         }
     }
 
-    let offset = 0n; // Use BigInt for >4GB offsets
+    let offset = BigInt(0); // Use BigInt for >4GB offsets
     const centralDirectory = [];
 
     for (const [filename, data] of Object.entries(files)) {
         const nameBuf = Buffer.from(filename);
         const nameLen = nameBuf.length;
         const size = BigInt(data.byteLength || data.length);
-        const useZip64 = size >= 0xFFFFFFFFn || offset >= 0xFFFFFFFFn;
+        const useZip64 = size >= BigInt(0xFFFFFFFF) || offset >= BigInt(0xFFFFFFFF);
         const dataU8 = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
         const crc = nativeCrc32(dataU8);
 
@@ -1896,17 +1896,17 @@ async function writeZip64Stream(filepath, files) {
     }
 
     const cdStart = offset;
-    let cdSize = 0n;
+    let cdSize = BigInt(0);
 
     for (const file of centralDirectory) {
         const nameLen = file.filename.length;
-        const useZip64 = file.size >= 0xFFFFFFFFn || file.offset >= 0xFFFFFFFFn;
+        const useZip64 = file.size >= BigInt(0xFFFFFFFF) || file.offset >= BigInt(0xFFFFFFFF);
 
         let extraFieldLength = 0;
         if (useZip64) {
             extraFieldLength += 4;
-            if (file.size >= 0xFFFFFFFFn) extraFieldLength += 16;
-            if (file.offset >= 0xFFFFFFFFn) extraFieldLength += 8;
+            if (file.size >= BigInt(0xFFFFFFFF)) extraFieldLength += 16;
+            if (file.offset >= BigInt(0xFFFFFFFF)) extraFieldLength += 8;
         }
 
         const cdBuf = Buffer.alloc(46 + nameLen + extraFieldLength);
@@ -1919,15 +1919,15 @@ async function writeZip64Stream(filepath, files) {
         cdBuf.writeUInt16LE(0, 14); // Last mod file date
         cdBuf.writeUInt32LE(file.crc, 16); // CRC-32
 
-        cdBuf.writeUInt32LE(file.size >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.size), 20); // Compressed size
-        cdBuf.writeUInt32LE(file.size >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.size), 24); // Uncompressed size
+        cdBuf.writeUInt32LE(file.size >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.size), 20); // Compressed size
+        cdBuf.writeUInt32LE(file.size >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.size), 24); // Uncompressed size
         cdBuf.writeUInt16LE(nameLen, 28); // File name length
         cdBuf.writeUInt16LE(extraFieldLength, 30); // Extra field length
         cdBuf.writeUInt16LE(0, 32); // File comment length
         cdBuf.writeUInt16LE(0, 34); // Disk number start
         cdBuf.writeUInt16LE(0, 36); // Internal file attributes
         cdBuf.writeUInt32LE(0, 38); // External file attributes
-        cdBuf.writeUInt32LE(file.offset >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(file.offset), 42); // Relative offset of LFH
+        cdBuf.writeUInt32LE(file.offset >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.offset), 42); // Relative offset of LFH
 
         file.filename.copy(cdBuf, 46);
 
@@ -1936,12 +1936,12 @@ async function writeZip64Stream(filepath, files) {
             cdBuf.writeUInt16LE(0x0001, pos); // Tag
             cdBuf.writeUInt16LE(extraFieldLength - 4, pos + 2); // Size
             pos += 4;
-            if (file.size >= 0xFFFFFFFFn) {
+            if (file.size >= BigInt(0xFFFFFFFF)) {
                 cdBuf.writeBigUInt64LE(file.size, pos);
                 cdBuf.writeBigUInt64LE(file.size, pos + 8);
                 pos += 16;
             }
-            if (file.offset >= 0xFFFFFFFFn) {
+            if (file.offset >= BigInt(0xFFFFFFFF)) {
                 cdBuf.writeBigUInt64LE(file.offset, pos);
             }
         }
@@ -1951,13 +1951,13 @@ async function writeZip64Stream(filepath, files) {
     }
 
     const totalEntries = BigInt(centralDirectory.length);
-    const useZip64Eocd = totalEntries >= 0xFFFFn || cdStart >= 0xFFFFFFFFn || cdSize >= 0xFFFFFFFFn;
+    const useZip64Eocd = totalEntries >= BigInt(0xFFFF) || cdStart >= BigInt(0xFFFFFFFF) || cdSize >= BigInt(0xFFFFFFFF);
 
     if (useZip64Eocd) {
         // ZIP64 EOCD
         const eocd64Buf = Buffer.alloc(56);
         eocd64Buf.writeUInt32LE(0x06064b50, 0); // ZIP64 EOCD signature
-        eocd64Buf.writeBigUInt64LE(44n, 4); // Size of ZIP64 EOCD record
+        eocd64Buf.writeBigUInt64LE(BigInt(44), 4); // Size of ZIP64 EOCD record
         eocd64Buf.writeUInt16LE(45, 12); // Version made by
         eocd64Buf.writeUInt16LE(45, 14); // Version needed to extract
         eocd64Buf.writeUInt32LE(0, 16); // Number of this disk
@@ -1982,10 +1982,10 @@ async function writeZip64Stream(filepath, files) {
     eocdBuf.writeUInt32LE(0x06054b50, 0); // EOCD signature
     eocdBuf.writeUInt16LE(0, 4); // Number of this disk
     eocdBuf.writeUInt16LE(0, 6); // Disk where CD starts
-    eocdBuf.writeUInt16LE(totalEntries >= 0xFFFFn ? 0xFFFF : Number(totalEntries), 8); // Number of CD records on this disk
-    eocdBuf.writeUInt16LE(totalEntries >= 0xFFFFn ? 0xFFFF : Number(totalEntries), 10); // Total number of CD records
-    eocdBuf.writeUInt32LE(cdSize >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdSize), 12); // Size of CD
-    eocdBuf.writeUInt32LE(cdStart >= 0xFFFFFFFFn ? 0xFFFFFFFF : Number(cdStart), 16); // Offset of start of CD
+    eocdBuf.writeUInt16LE(totalEntries >= BigInt(0xFFFF) ? 0xFFFF : Number(totalEntries), 8); // Number of CD records on this disk
+    eocdBuf.writeUInt16LE(totalEntries >= BigInt(0xFFFF) ? 0xFFFF : Number(totalEntries), 10); // Total number of CD records
+    eocdBuf.writeUInt32LE(cdSize >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(cdSize), 12); // Size of CD
+    eocdBuf.writeUInt32LE(cdStart >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(cdStart), 16); // Offset of start of CD
     eocdBuf.writeUInt16LE(0, 20); // ZIP file comment length
     await writeChunk(eocdBuf);
 
