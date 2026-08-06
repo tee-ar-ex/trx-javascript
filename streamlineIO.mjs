@@ -1,4 +1,3 @@
-
 import { mat3, mat4, vec3, vec4 } from "gl-matrix"; //for trk
 import * as fs from "fs";
 import * as fflate from "fflate";
@@ -11,65 +10,80 @@ import { crc32 as nativeCrc32 } from "node:zlib";
 // Used by axcodesFromAffine to replicate nibabel's io_orientation approach.
 // ---------------------------------------------------------------------------
 function _matMul3(A, B) {
-    const C = [[0,0,0],[0,0,0],[0,0,0]];
-    for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-            for (let k = 0; k < 3; k++)
-                C[i][j] += A[i][k] * B[k][j];
-    return C;
+  const C = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++)
+      for (let k = 0; k < 3; k++) C[i][j] += A[i][k] * B[k][j];
+  return C;
 }
 
 function _svd3(A) {
-    // One-sided Jacobi SVD: iteratively zero off-diagonal elements of A^T A
-    // via Givens rotations applied to the right (accumulating into Vt).
-    const Vt = [[1,0,0],[0,1,0],[0,0,1]];
-    const B  = A.map(r => [...r]);   // working copy
+  // One-sided Jacobi SVD: iteratively zero off-diagonal elements of A^T A
+  // via Givens rotations applied to the right (accumulating into Vt).
+  const Vt = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ];
+  const B = A.map((r) => [...r]); // working copy
 
-    for (let iter = 0; iter < 20; iter++) {
-        let changed = false;
-        for (let p = 0; p < 2; p++) {
-            for (let q = p + 1; q < 3; q++) {
-                let bpp = 0, bqq = 0, bpq = 0;
-                for (let k = 0; k < 3; k++) {
-                    bpp += B[k][p] * B[k][p];
-                    bqq += B[k][q] * B[k][q];
-                    bpq += B[k][p] * B[k][q];
-                }
-                if (Math.abs(bpq) < 1e-14 * Math.sqrt(bpp * bqq + 1e-300)) continue;
-                changed = true;
-                const tau = (bqq - bpp) / (2 * bpq);
-                const t   = Math.sign(tau) / (Math.abs(tau) + Math.sqrt(1 + tau * tau));
-                const c   = 1 / Math.sqrt(1 + t * t);
-                const s   = t * c;
-                // Apply Givens rotation to columns p,q of B
-                for (let k = 0; k < 3; k++) {
-                    const bp = B[k][p], bq = B[k][q];
-                    B[k][p] =  c * bp + s * bq;
-                    B[k][q] = -s * bp + c * bq;
-                }
-                // Accumulate rotation into Vt (rows of Vt = columns of V)
-                for (let k = 0; k < 3; k++) {
-                    const vp = Vt[p][k], vq = Vt[q][k];
-                    Vt[p][k] =  c * vp + s * vq;
-                    Vt[q][k] = -s * vp + c * vq;
-                }
-            }
+  for (let iter = 0; iter < 20; iter++) {
+    let changed = false;
+    for (let p = 0; p < 2; p++) {
+      for (let q = p + 1; q < 3; q++) {
+        let bpp = 0,
+          bqq = 0,
+          bpq = 0;
+        for (let k = 0; k < 3; k++) {
+          bpp += B[k][p] * B[k][p];
+          bqq += B[k][q] * B[k][q];
+          bpq += B[k][p] * B[k][q];
         }
-        if (!changed) break;
+        if (Math.abs(bpq) < 1e-14 * Math.sqrt(bpp * bqq + 1e-300)) continue;
+        changed = true;
+        const tau = (bqq - bpp) / (2 * bpq);
+        const t = Math.sign(tau) / (Math.abs(tau) + Math.sqrt(1 + tau * tau));
+        const c = 1 / Math.sqrt(1 + t * t);
+        const s = t * c;
+        // Apply Givens rotation to columns p,q of B
+        for (let k = 0; k < 3; k++) {
+          const bp = B[k][p],
+            bq = B[k][q];
+          B[k][p] = c * bp + s * bq;
+          B[k][q] = -s * bp + c * bq;
+        }
+        // Accumulate rotation into Vt (rows of Vt = columns of V)
+        for (let k = 0; k < 3; k++) {
+          const vp = Vt[p][k],
+            vq = Vt[q][k];
+          Vt[p][k] = c * vp + s * vq;
+          Vt[q][k] = -s * vp + c * vq;
+        }
+      }
     }
+    if (!changed) break;
+  }
 
-    // Singular values = column norms of B; U = columns of B normalised
-    const U = [[0,0,0],[0,0,0],[0,0,0]];
-    const S = [0, 0, 0];
-    for (let j = 0; j < 3; j++) {
-        let norm = 0;
-        for (let i = 0; i < 3; i++) norm += B[i][j] * B[i][j];
-        norm = Math.sqrt(norm);
-        S[j] = norm;
-        for (let i = 0; i < 3; i++)
-            U[i][j] = norm > 0 ? B[i][j] / norm : (i === j ? 1 : 0);
-    }
-    return { U, S, Vt };   // A ≈ U * diag(S) * Vt
+  // Singular values = column norms of B; U = columns of B normalised
+  const U = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  const S = [0, 0, 0];
+  for (let j = 0; j < 3; j++) {
+    let norm = 0;
+    for (let i = 0; i < 3; i++) norm += B[i][j] * B[i][j];
+    norm = Math.sqrt(norm);
+    S[j] = norm;
+    for (let i = 0; i < 3; i++)
+      U[i][j] = norm > 0 ? B[i][j] / norm : i === j ? 1 : 0;
+  }
+  return { U, S, Vt }; // A ≈ U * diag(S) * Vt
 }
 
 /**
@@ -80,138 +94,161 @@ function _svd3(A) {
  *   3. Per-column argmax(|R|) with axis exclusion.
  */
 function axcodesFromAffine(aff) {
-    const POS = ['R', 'A', 'S'];
-    const NEG = ['L', 'P', 'I'];
+  const POS = ["R", "A", "S"];
+  const NEG = ["L", "P", "I"];
 
-    // Step 1: column-normalised 3×3 block
-    const rs = [[0,0,0],[0,0,0],[0,0,0]];
-    for (let col = 0; col < 3; col++) {
-        let norm = 0;
-        for (let row = 0; row < 3; row++) norm += aff[row][col] ** 2;
-        norm = Math.sqrt(norm) || 1;
-        for (let row = 0; row < 3; row++) rs[row][col] = aff[row][col] / norm;
+  // Step 1: column-normalised 3×3 block
+  const rs = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (let col = 0; col < 3; col++) {
+    let norm = 0;
+    for (let row = 0; row < 3; row++) norm += aff[row][col] ** 2;
+    norm = Math.sqrt(norm) || 1;
+    for (let row = 0; row < 3; row++) rs[row][col] = aff[row][col] / norm;
+  }
+
+  // Step 2: R = U * Vt
+  const { U, Vt } = _svd3(rs);
+  const R = _matMul3(U, Vt);
+
+  // Step 3: argmax per column with axis exclusion
+  const used = [false, false, false];
+  let result = "";
+  for (let col = 0; col < 3; col++) {
+    let bestRow = 0,
+      bestVal = -1;
+    for (let row = 0; row < 3; row++) {
+      if (!used[row] && Math.abs(R[row][col]) > bestVal) {
+        bestVal = Math.abs(R[row][col]);
+        bestRow = row;
+      }
     }
-
-    // Step 2: R = U * Vt
-    const { U, Vt } = _svd3(rs);
-    const R = _matMul3(U, Vt);
-
-    // Step 3: argmax per column with axis exclusion
-    const used = [false, false, false];
-    let result = '';
-    for (let col = 0; col < 3; col++) {
-        let bestRow = 0, bestVal = -1;
-        for (let row = 0; row < 3; row++) {
-            if (!used[row] && Math.abs(R[row][col]) > bestVal) {
-                bestVal = Math.abs(R[row][col]);
-                bestRow = row;
-            }
-        }
-        used[bestRow] = true;
-        result += R[bestRow][col] >= 0 ? POS[bestRow] : NEG[bestRow];
-    }
-    return result;
+    used[bestRow] = true;
+    result += R[bestRow][col] >= 0 ? POS[bestRow] : NEG[bestRow];
+  }
+  return result;
 }
 
 function parseZipCentralDirectory(dataOrPath, isLocalFile) {
-    let fd = null;
-    let n = 0;
-    let dataBuffer = null;
+  let fd = null;
+  let n = 0;
+  let dataBuffer = null;
 
+  if (isLocalFile) {
+    fd = fs.openSync(dataOrPath, "r");
+    n = fs.fstatSync(fd).size;
+  } else {
+    dataBuffer = new Uint8Array(dataOrPath);
+    n = dataBuffer.byteLength;
+  }
+
+  function readBytes(offset, length) {
+    const buf = Buffer.alloc(length);
     if (isLocalFile) {
-        fd = fs.openSync(dataOrPath, 'r');
-        n = fs.fstatSync(fd).size;
+      fs.readSync(fd, buf, 0, length, offset);
     } else {
-        dataBuffer = new Uint8Array(dataOrPath);
-        n = dataBuffer.byteLength;
+      buf.set(dataBuffer.subarray(offset, offset + length));
     }
+    return buf;
+  }
 
-    function readBytes(offset, length) {
-        const buf = Buffer.alloc(length);
-        if (isLocalFile) {
-            fs.readSync(fd, buf, 0, length, offset);
-        } else {
-            buf.set(dataBuffer.subarray(offset, offset + length));
-        }
-        return buf;
+  const scanSize = Math.min(n, 65558);
+  const scanBuf = readBytes(n - scanSize, scanSize);
+
+  let eocd = -1;
+  for (let i = scanSize - 22; i >= 0; i--) {
+    if (scanBuf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
     }
+  }
 
-    const scanSize = Math.min(n, 65558);
-    const scanBuf = readBytes(n - scanSize, scanSize);
-
-    let eocd = -1;
-    for (let i = scanSize - 22; i >= 0; i--) {
-        if (scanBuf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
-    }
-
-    if (eocd === -1) { if (fd) fs.closeSync(fd); throw new Error("Not a ZIP file"); }
-
-    let cdCount = scanBuf.readUInt16LE(eocd + 8);
-    let cdOffset = scanBuf.readUInt32LE(eocd + 16);
-
-    for (let i = eocd - 20; i >= 0; i--) {
-        if (scanBuf.readUInt32LE(i) === 0x07064b50) {
-            const eocd64off = Number(scanBuf.readBigUInt64LE(i + 8));
-            const eocd64Buf = readBytes(eocd64off, 56);
-            if (eocd64Buf.readUInt32LE(0) === 0x06064b50) {
-                cdCount = Number(eocd64Buf.readBigUInt64LE(32));
-                cdOffset = Number(eocd64Buf.readBigUInt64LE(48));
-            }
-            break;
-        }
-    }
-
-    const cdSize = (n - scanSize + eocd) - cdOffset;
-    const cdBuf = readBytes(cdOffset, cdSize);
-
-    const files = {};
-    let pos = 0;
-    for (let i = 0; i < cdCount; i++) {
-        if (pos + 46 > cdSize || cdBuf.readUInt32LE(pos) !== 0x02014b50) break;
-        const compMethod = cdBuf.readUInt16LE(pos + 10);
-        const compSize = cdBuf.readUInt32LE(pos + 20);
-        let origSize = cdBuf.readUInt32LE(pos + 24);
-        const fnLen = cdBuf.readUInt16LE(pos + 28);
-        const exLen = cdBuf.readUInt16LE(pos + 30);
-        const cmLen = cdBuf.readUInt16LE(pos + 32);
-        let localHeaderOffset = cdBuf.readUInt32LE(pos + 42);
-
-        const fname = cdBuf.toString('utf-8', pos + 46, pos + 46 + fnLen);
-
-        if (origSize === 0xFFFFFFFF || localHeaderOffset === 0xFFFFFFFF) {
-            let ep = pos + 46 + fnLen;
-            const epEnd = ep + exLen;
-            while (ep + 4 <= epEnd) {
-                const tag = cdBuf.readUInt16LE(ep);
-                const sz = cdBuf.readUInt16LE(ep + 2);
-                if (tag === 0x0001 && sz >= 8) {
-                    let fieldPos = ep + 4;
-                    if (origSize === 0xFFFFFFFF) { origSize = Number(cdBuf.readBigUInt64LE(fieldPos)); fieldPos += 8; }
-                    if (compSize === 0xFFFFFFFF) { fieldPos += 8; }
-                    if (localHeaderOffset === 0xFFFFFFFF) { localHeaderOffset = Number(cdBuf.readBigUInt64LE(fieldPos)); }
-                    break;
-                }
-                ep += 4 + sz;
-            }
-        }
-
-        const lfhBuf = readBytes(localHeaderOffset, 30);
-        const lfhFnLen = lfhBuf.readUInt16LE(26);
-        const lfhExLen = lfhBuf.readUInt16LE(28);
-        const dataOffset = localHeaderOffset + 30 + lfhFnLen + lfhExLen;
-
-        files[fname] = {
-            origSize,
-            compMethod,
-            dataOffset,
-            compSize: (compSize === 0xFFFFFFFF && exLen > 0) ? undefined : compSize
-        };
-
-        pos += 46 + fnLen + exLen + cmLen;
-    }
-
+  if (eocd === -1) {
     if (fd) fs.closeSync(fd);
-    return files;
+    throw new Error("Not a ZIP file");
+  }
+
+  let cdCount = scanBuf.readUInt16LE(eocd + 8);
+  let cdOffset = scanBuf.readUInt32LE(eocd + 16);
+
+  for (let i = eocd - 20; i >= 0; i--) {
+    if (scanBuf.readUInt32LE(i) === 0x07064b50) {
+      const eocd64off = Number(scanBuf.readBigUInt64LE(i + 8));
+      const eocd64Buf = readBytes(eocd64off, 56);
+      if (eocd64Buf.readUInt32LE(0) === 0x06064b50) {
+        cdCount = Number(eocd64Buf.readBigUInt64LE(32));
+        cdOffset = Number(eocd64Buf.readBigUInt64LE(48));
+      }
+      break;
+    }
+  }
+
+  const cdSize = n - scanSize + eocd - cdOffset;
+  const cdBuf = readBytes(cdOffset, cdSize);
+
+  const files = {};
+  let pos = 0;
+  for (let i = 0; i < cdCount; i++) {
+    if (pos + 46 > cdSize || cdBuf.readUInt32LE(pos) !== 0x02014b50) break;
+    const compMethod = cdBuf.readUInt16LE(pos + 10);
+    let compSize = cdBuf.readUInt32LE(pos + 20);
+    let origSize = cdBuf.readUInt32LE(pos + 24);
+    const fnLen = cdBuf.readUInt16LE(pos + 28);
+    const exLen = cdBuf.readUInt16LE(pos + 30);
+    const cmLen = cdBuf.readUInt16LE(pos + 32);
+    let localHeaderOffset = cdBuf.readUInt32LE(pos + 42);
+
+    const fname = cdBuf.toString("utf-8", pos + 46, pos + 46 + fnLen);
+
+    if (
+      origSize === 0xffffffff ||
+      compSize === 0xffffffff ||
+      localHeaderOffset === 0xffffffff
+    ) {
+      let ep = pos + 46 + fnLen;
+      const epEnd = ep + exLen;
+      while (ep + 4 <= epEnd) {
+        const tag = cdBuf.readUInt16LE(ep);
+        const sz = cdBuf.readUInt16LE(ep + 2);
+        if (tag === 0x0001 && sz >= 8) {
+          let fieldPos = ep + 4;
+          if (origSize === 0xffffffff) {
+            origSize = Number(cdBuf.readBigUInt64LE(fieldPos));
+            fieldPos += 8;
+          }
+          if (compSize === 0xffffffff) {
+            compSize = Number(cdBuf.readBigUInt64LE(fieldPos));
+            fieldPos += 8;
+          }
+          if (localHeaderOffset === 0xffffffff) {
+            localHeaderOffset = Number(cdBuf.readBigUInt64LE(fieldPos));
+          }
+          break;
+        }
+        ep += 4 + sz;
+      }
+    }
+
+    const lfhBuf = readBytes(localHeaderOffset, 30);
+    const lfhFnLen = lfhBuf.readUInt16LE(26);
+    const lfhExLen = lfhBuf.readUInt16LE(28);
+    const dataOffset = localHeaderOffset + 30 + lfhFnLen + lfhExLen;
+
+    files[fname] = {
+      origSize,
+      compMethod,
+      dataOffset,
+      compSize,
+    };
+
+    pos += 46 + fnLen + exLen + cmLen;
+  }
+
+  if (fd) fs.closeSync(fd);
+  return files;
 }
 
 //Install dependencies
@@ -227,86 +264,79 @@ function parseZipCentralDirectory(dataOrPath, isLocalFile) {
  * @property {Object} [header] - Parsed header.json contents (TRX only).
  */
 
-
-
 //Read a Matlab V4 file, n.b. does not support modern versions
 //https://www.mathworks.com/help/pdf_doc/matlab/matfile_format.pdf
 function readMatV4(buffer) {
-  let len = buffer.byteLength
+  let len = buffer.byteLength;
   if (len < 40)
-    throw new Error("File too small to be MAT v4: bytes = " + buffer.byteLength)
-  let reader = new DataView(buffer)
-  let magic = reader.getUint16(0, true)
-  let _buffer = buffer
+    throw new Error(
+      "File too small to be MAT v4: bytes = " + buffer.byteLength,
+    );
+  let reader = new DataView(buffer);
+  let magic = reader.getUint16(0, true);
+  let _buffer = buffer;
   if (magic === 35615 || magic === 8075) {
     // gzip signature 0x1F8B in little and big endian
-    const raw = fflate.decompressSync(new Uint8Array(buffer))
-    reader = new DataView(raw.buffer)
-    magic = reader.getUint16(0, true)
-    _buffer = raw.buffer
-    len = _buffer.byteLength
+    const raw = fflate.decompressSync(new Uint8Array(buffer));
+    reader = new DataView(raw.buffer);
+    magic = reader.getUint16(0, true);
+    _buffer = raw.buffer;
+    len = _buffer.byteLength;
   }
-  const textDecoder = new TextDecoder('utf-8')
-  let bytes = new Uint8Array(_buffer)
-  let pos = 0
-  let mat = []
+  const textDecoder = new TextDecoder("utf-8");
+  let bytes = new Uint8Array(_buffer);
+  let pos = 0;
+  let mat = [];
   function getTensDigit(v) {
-    return (Math.floor(v/10) % 10)
+    return Math.floor(v / 10) % 10;
   }
   function readArray(tagDataType, tagBytesStart, tagBytesEnd) {
-    const byteArray = new Uint8Array(bytes.subarray(tagBytesStart, tagBytesEnd))
-    if (tagDataType === 1)
-      return new Float32Array(byteArray.buffer)
-    if (tagDataType === 2)
-      return new Int32Array(byteArray.buffer)
-    if (tagDataType === 3)
-      return new Int16Array(byteArray.buffer)
-    if (tagDataType === 4)
-      return new Uint16Array(byteArray.buffer)
-    if (tagDataType === 5)
-      return new Uint8Array(byteArray.buffer)
-    return new Float64Array(byteArray.buffer)
+    const byteArray = new Uint8Array(
+      bytes.subarray(tagBytesStart, tagBytesEnd),
+    );
+    if (tagDataType === 1) return new Float32Array(byteArray.buffer);
+    if (tagDataType === 2) return new Int32Array(byteArray.buffer);
+    if (tagDataType === 3) return new Int16Array(byteArray.buffer);
+    if (tagDataType === 4) return new Uint16Array(byteArray.buffer);
+    if (tagDataType === 5) return new Uint8Array(byteArray.buffer);
+    return new Float64Array(byteArray.buffer);
   }
   function readTag() {
-    let mtype = reader.getUint32(pos, true)
-    let mrows = reader.getUint32(pos+4, true)
-    let ncols = reader.getUint32(pos+8, true)
-    let imagf = reader.getUint32(pos+12, true)
-    let namlen = reader.getUint32(pos+16, true)
-    pos+= 20; //skip header
+    let mtype = reader.getUint32(pos, true);
+    let mrows = reader.getUint32(pos + 4, true);
+    let ncols = reader.getUint32(pos + 8, true);
+    let imagf = reader.getUint32(pos + 12, true);
+    let namlen = reader.getUint32(pos + 16, true);
+    pos += 20; //skip header
     if (imagf !== 0)
-      throw new Error("Matlab V4 reader does not support imaginary numbers")
-    let tagArrayItems = mrows * ncols
+      throw new Error("Matlab V4 reader does not support imaginary numbers");
+    let tagArrayItems = mrows * ncols;
     if (tagArrayItems < 1)
-      throw new Error("mrows * ncols must be greater than one")
-    const byteArray = new Uint8Array(bytes.subarray(pos, pos+namlen))
-    let tagName = textDecoder.decode(byteArray).trim().replaceAll('\x00','')
-    let tagDataType = getTensDigit(mtype)
+      throw new Error("mrows * ncols must be greater than one");
+    const byteArray = new Uint8Array(bytes.subarray(pos, pos + namlen));
+    let tagName = textDecoder.decode(byteArray).trim().replaceAll("\x00", "");
+    let tagDataType = getTensDigit(mtype);
     //0 double-precision (64-bit) floating-point numbers
     //1 single-precision (32-bit) floating-point numbers
     //2 32-bit signed integers
     //3 16-bit signed integers
     //4 16-bit unsigned integers
     //5 8-bit unsigned integers
-    let tagBytesPerItem = 8
-    if ((tagDataType >= 1) && (tagDataType <= 2))
-      tagBytesPerItem = 4
-    else if ((tagDataType >= 3) && (tagDataType <= 4))
-      tagBytesPerItem = 2
-    else if (tagDataType === 5)
-      tagBytesPerItem = 1
+    let tagBytesPerItem = 8;
+    if (tagDataType >= 1 && tagDataType <= 2) tagBytesPerItem = 4;
+    else if (tagDataType >= 3 && tagDataType <= 4) tagBytesPerItem = 2;
+    else if (tagDataType === 5) tagBytesPerItem = 1;
     else if (tagDataType !== 0)
-      throw new Error("impossible Matlab v4 datatype")
-    pos+= namlen; //skip name
+      throw new Error("impossible Matlab v4 datatype");
+    pos += namlen; //skip name
     if (mtype > 50)
-      throw new Error("Does not appear to be little-endian V4 Matlab file")
-    let posEnd = pos + (tagArrayItems * tagBytesPerItem)
-    mat[tagName] = readArray(tagDataType, pos, posEnd)
-    pos = posEnd
+      throw new Error("Does not appear to be little-endian V4 Matlab file");
+    let posEnd = pos + tagArrayItems * tagBytesPerItem;
+    mat[tagName] = readArray(tagDataType, pos, posEnd);
+    pos = posEnd;
   }
-  while ((pos + 20) < len)
-    readTag()
-  return mat
+  while (pos + 20 < len) readTag();
+  return mat;
 } // readMatV4()
 
 /**
@@ -319,84 +349,113 @@ function readMatV4(buffer) {
  * @param {ArrayBuffer} buffer - Raw file data (may be gzip-compressed; decompressed automatically).
  * @returns {StreamlineData} An object with `pts` and `offsetPt0`.
  */
- // https://dsi-studio.labsolver.org/doc/cli_data.html
- // https://brain.labsolver.org/hcp_trk_atlas.html
+// https://dsi-studio.labsolver.org/doc/cli_data.html
+// https://brain.labsolver.org/hcp_trk_atlas.html
 function readTT(buffer) {
-  let offsetPt0 = []
-  let pts = []
+  let offsetPt0 = [];
+  let pts = [];
   const mat = readMatV4(buffer);
-  if (!('trans_to_mni' in mat))
-    throw new Error("TT format file must have 'trans_to_mni'")
-  if (!('voxel_size' in mat))
-    throw new Error("TT format file must have 'voxel_size'")
-  if (!('track' in mat))
-    throw new Error("TT format file must have 'track'")
-  let trans_to_mni = mat4.create()
-  let m = mat.trans_to_mni
-  trans_to_mni = mat4.fromValues(m[0],m[1],m[2],m[3],  m[4],m[5],m[6],m[7],  m[8],m[9],m[10],m[11],  m[12],m[13],m[14],m[15])
-  mat4.transpose(trans_to_mni, trans_to_mni)
-  let zoomMat = mat4.create()
-  zoomMat = mat4.fromValues(1 / mat.voxel_size[0],0,0,-0.5,
-        0, 1 / mat.voxel_size[1], 0, -0.5,
-        0, 0, 1 / mat.voxel_size[2], -0.5,
-        0, 0, 0, 1)
-  mat4.transpose(zoomMat, zoomMat)
+  if (!("trans_to_mni" in mat))
+    throw new Error("TT format file must have 'trans_to_mni'");
+  if (!("voxel_size" in mat))
+    throw new Error("TT format file must have 'voxel_size'");
+  if (!("track" in mat)) throw new Error("TT format file must have 'track'");
+  let trans_to_mni = mat4.create();
+  let m = mat.trans_to_mni;
+  trans_to_mni = mat4.fromValues(
+    m[0],
+    m[1],
+    m[2],
+    m[3],
+    m[4],
+    m[5],
+    m[6],
+    m[7],
+    m[8],
+    m[9],
+    m[10],
+    m[11],
+    m[12],
+    m[13],
+    m[14],
+    m[15],
+  );
+  mat4.transpose(trans_to_mni, trans_to_mni);
+  let zoomMat = mat4.create();
+  zoomMat = mat4.fromValues(
+    1 / mat.voxel_size[0],
+    0,
+    0,
+    -0.5,
+    0,
+    1 / mat.voxel_size[1],
+    0,
+    -0.5,
+    0,
+    0,
+    1 / mat.voxel_size[2],
+    -0.5,
+    0,
+    0,
+    0,
+    1,
+  );
+  mat4.transpose(zoomMat, zoomMat);
   function parse_tt(track) {
-    let dv = new DataView(track.buffer)
-    let pos = []
-    let nvert3 = 0
-    let i = 0
-    while(i < track.length) {
-      pos.push(i)
-      let newpts = dv.getUint32(i, true)
-      i = i + newpts+13
-      nvert3 += newpts
+    let dv = new DataView(track.buffer);
+    let pos = [];
+    let nvert3 = 0;
+    let i = 0;
+    while (i < track.length) {
+      pos.push(i);
+      let newpts = dv.getUint32(i, true);
+      i = i + newpts + 13;
+      nvert3 += newpts;
     }
-    offsetPt0 = new Uint32Array(pos.length+1)
-    pts = new Float32Array(nvert3)
-    let npt = 0
+    offsetPt0 = new Uint32Array(pos.length + 1);
+    pts = new Float32Array(nvert3);
+    let npt = 0;
     for (let i = 0; i < pos.length; i++) {
-      offsetPt0[i] = npt / 3
-      let p = pos[i]
-      let sz = dv.getUint32(p, true)/3
-      let x = dv.getInt32(p+4, true)
-      let y = dv.getInt32(p+8, true)
-      let z = dv.getInt32(p+12, true)
-      p += 16
-      pts[npt++] = x
-      pts[npt++] = y
-      pts[npt++] = z
+      offsetPt0[i] = npt / 3;
+      let p = pos[i];
+      let sz = dv.getUint32(p, true) / 3;
+      let x = dv.getInt32(p + 4, true);
+      let y = dv.getInt32(p + 8, true);
+      let z = dv.getInt32(p + 12, true);
+      p += 16;
+      pts[npt++] = x;
+      pts[npt++] = y;
+      pts[npt++] = z;
       for (let j = 2; j <= sz; j++) {
-          x = x + dv.getInt8(p++)
-          y = y + dv.getInt8(p++)
-          z = z + dv.getInt8(p++)
-          pts[npt++] = x
-          pts[npt++] = y
-          pts[npt++] = z
+        x = x + dv.getInt8(p++);
+        y = y + dv.getInt8(p++);
+        z = z + dv.getInt8(p++);
+        pts[npt++] = x;
+        pts[npt++] = y;
+        pts[npt++] = z;
       }
     } //for each streamline
-    for (let i = 0; i < npt; i++)
-      pts[i] = pts[i]/32.0
-    let vox2mmMat = mat4.create()
-    mat4.mul(vox2mmMat, zoomMat, trans_to_mni)
-    let v = 0
+    for (let i = 0; i < npt; i++) pts[i] = pts[i] / 32.0;
+    let vox2mmMat = mat4.create();
+    mat4.mul(vox2mmMat, zoomMat, trans_to_mni);
+    let v = 0;
     {
-      const pos = vec4.create()
+      const pos = vec4.create();
       for (let i = 0; i < npt / 3; i++) {
-        vec4.set(pos, pts[v], pts[v + 1], pts[v + 2], 1)
-        vec4.transformMat4(pos, pos, vox2mmMat)
-        pts[v++] = pos[0]
-        pts[v++] = pos[1]
-        pts[v++] = pos[2]
+        vec4.set(pos, pts[v], pts[v + 1], pts[v + 2], 1);
+        vec4.transformMat4(pos, pos, vox2mmMat);
+        pts[v++] = pos[0];
+        pts[v++] = pos[1];
+        pts[v++] = pos[2];
       }
     }
     offsetPt0[pos.length] = npt / 3; //solve fence post problem, offset for final streamline
   } // parse_tt()
-  parse_tt(mat.track)
+  parse_tt(mat.track);
   return {
     pts,
     offsetPt0,
-  }
+  };
 } // readTT()
 
 /**
@@ -419,11 +478,11 @@ function readTRK(buffer) {
   if (magic !== 1128354388) {
     //e.g. TRK.gz
     let raw;
-    if (magic === 4247762216) { //zstd 
+    if (magic === 4247762216) {
+      //zstd
       raw = fzstd.decompress(new Uint8Array(buffer));
       raw = new Uint8Array(raw);
-    } else
-      raw = fflate.decompressSync(new Uint8Array(buffer));
+    } else raw = fflate.decompressSync(new Uint8Array(buffer));
     buffer = raw.buffer;
     reader = new DataView(buffer);
     magic = reader.getUint32(0, true); //'TRAC'
@@ -465,7 +524,7 @@ function readTRK(buffer) {
     0,
     0,
     0,
-    1
+    1,
   );
   let n_properties = reader.getInt16(238, true);
   if (n_properties > 0) {
@@ -488,7 +547,8 @@ function readTRK(buffer) {
   let vox2mmMat = mat4.create();
   mat4.mul(vox2mmMat, zoomMat, mat);
   let dataView = new DataView(buffer, hdr_sz);
-  if ((dataView.byteLength & 3) !== 0) throw new Error("Invalid TRK: track data is not 32-bit aligned");
+  if ((dataView.byteLength & 3) !== 0)
+    throw new Error("Invalid TRK: track data is not 32-bit aligned");
   let totalWords = dataView.byteLength / 4;
 
   let num_streamlines = 0;
@@ -498,7 +558,8 @@ function readTRK(buffer) {
     const n_pts = dataView.getInt32(w * 4, true);
     if (n_pts < 0) throw new Error("Invalid TRK: negative point count");
     const nextW = w + 1 + n_pts * (3 + n_scalars) + n_properties;
-    if (nextW > totalWords) throw new Error("Invalid TRK: truncated track data");
+    if (nextW > totalWords)
+      throw new Error("Invalid TRK: truncated track data");
     num_streamlines++;
     num_points += n_pts;
     w = nextW;
@@ -507,10 +568,12 @@ function readTRK(buffer) {
   let offsetPt0 = new Uint32Array(num_streamlines + 1);
   let pts = new Float32Array(num_points * 3);
   if (n_scalars > 0) {
-    for (let s = 0; s < n_scalars; s++) dpv[s].vals = new Float32Array(num_points);
+    for (let s = 0; s < n_scalars; s++)
+      dpv[s].vals = new Float32Array(num_points);
   }
   if (n_properties > 0) {
-    for (let j = 0; j < n_properties; j++) dps[j].vals = new Float32Array(num_streamlines);
+    for (let j = 0; j < n_properties; j++)
+      dps[j].vals = new Float32Array(num_streamlines);
   }
 
   w = 0;
@@ -529,19 +592,19 @@ function readTRK(buffer) {
       w += 3; //read 3 32-bit floats for XYZ position
       pts[npt3++] =
         ptx * vox2mmMat[0] +
-          pty * vox2mmMat[1] +
-          ptz * vox2mmMat[2] +
-          vox2mmMat[3];
+        pty * vox2mmMat[1] +
+        ptz * vox2mmMat[2] +
+        vox2mmMat[3];
       pts[npt3++] =
         ptx * vox2mmMat[4] +
-          pty * vox2mmMat[5] +
-          ptz * vox2mmMat[6] +
-          vox2mmMat[7];
+        pty * vox2mmMat[5] +
+        ptz * vox2mmMat[6] +
+        vox2mmMat[7];
       pts[npt3++] =
         ptx * vox2mmMat[8] +
-          pty * vox2mmMat[9] +
-          ptz * vox2mmMat[10] +
-          vox2mmMat[11];
+        pty * vox2mmMat[9] +
+        ptz * vox2mmMat[10] +
+        vox2mmMat[11];
       if (n_scalars > 0) {
         for (let s = 0; s < n_scalars; s++) {
           dpv[s].vals[npt] = dataView.getFloat32(w * 4, true);
@@ -560,14 +623,18 @@ function readTRK(buffer) {
   //add 'first index' as if one more line was added (fence post problem)
   offsetPt0[noffset++] = npt;
   let header = {
-    DIMENSIONS: [reader.getInt16(6, true), reader.getInt16(8, true), reader.getInt16(10, true)],
+    DIMENSIONS: [
+      reader.getInt16(6, true),
+      reader.getInt16(8, true),
+      reader.getInt16(10, true),
+    ],
     VOXEL_SIZES: [voxel_sizeX, voxel_sizeY, voxel_sizeZ],
     VOXEL_TO_RASMM: [
       [mat[0], mat[1], mat[2], mat[3]],
       [mat[4], mat[5], mat[6], mat[7]],
       [mat[8], mat[9], mat[10], mat[11]],
-      [mat[12], mat[13], mat[14], mat[15]]
-    ]
+      [mat[12], mat[13], mat[14], mat[15]],
+    ],
   };
 
   return {
@@ -575,7 +642,7 @@ function readTRK(buffer) {
     offsetPt0,
     dps,
     dpv,
-    header
+    header,
   };
 } // readTRK()
 
@@ -643,12 +710,12 @@ function readTCK(buffer) {
   }
   //resize offset/vertex arrays that were initially over-provisioned
   pts = pts.subarray(0, npt3);
-  offsetPt0 = offsetPt0.subarray(0, noffset); 
+  offsetPt0 = offsetPt0.subarray(0, noffset);
   return {
     pts,
     offsetPt0,
   };
-}; //readTCK()
+} //readTCK()
 
 function readTxtVTK(buffer) {
   var enc = new TextDecoder("utf-8");
@@ -660,7 +727,8 @@ function readTxtVTK(buffer) {
   if (!lines[2].startsWith("ASCII")) throw new Error("Not ASCII VTK mesh");
   let pos = 3;
   while (lines[pos].length < 1) pos++; //skip blank lines
-  if (!lines[pos].includes("POLYDATA")) throw new Error("Not ASCII VTK polydata");
+  if (!lines[pos].includes("POLYDATA"))
+    throw new Error("Not ASCII VTK polydata");
   pos++;
   while (lines[pos].length < 1) pos++; //skip blank lines
   if (!lines[pos].startsWith("POINTS")) throw new Error("Not VTK POINTS");
@@ -802,7 +870,7 @@ function readTxtVTK(buffer) {
  *   For streamline data (LINES) returns `{pts, offsetPt0}`.
  *   For mesh data (TRIANGLE_STRIPS, POLYGONS) returns `{positions, indices}`.
  */
-function readVTK (buffer) {
+function readVTK(buffer) {
   let len = buffer.byteLength;
   if (len < 20)
     throw new Error("File too small to be VTK: bytes = " + buffer.byteLength);
@@ -820,11 +888,13 @@ function readVTK (buffer) {
   if (!line.startsWith("# vtk DataFile")) throw new Error("Invalid VTK mesh");
   line = readStr(); //2nd line comment
   line = readStr(); //3rd line ASCII/BINARY
-  if (line.startsWith("ASCII")) return readTxtVTK(buffer); //from NiiVue
+  if (line.startsWith("ASCII"))
+    return readTxtVTK(buffer); //from NiiVue
   else if (!line.startsWith("BINARY"))
     throw new Error("Invalid VTK image, expected ASCII or BINARY: " + line);
   line = readStr(); //5th line "DATASET POLYDATA"
-  if (!line.includes("POLYDATA")) throw new Error("Only able to read VTK POLYDATA: " + line);
+  if (!line.includes("POLYDATA"))
+    throw new Error("Only able to read VTK POLYDATA: " + line);
   line = readStr(); //6th line "POINTS 10261 float"
   if (
     !line.includes("POINTS") ||
@@ -857,44 +927,44 @@ function readVTK (buffer) {
     let posOK = pos;
     line = readStr(); //borked files "OFFSETS vtktypeint64"
     if (line.startsWith("OFFSETS")) {
-        let offset_items = line.trim().split(/\s+/);
-        let num_offsets;
-        
-        if (offset_items.length >= 3) {
-            num_offsets = parseInt(offset_items[2]);
-        } else {
-            num_offsets = n_count;
-        }
+      let offset_items = line.trim().split(/\s+/);
+      let num_offsets;
 
-        let isInt64 = false;
-        if (line.includes("int64")) isInt64 = true;
-
-        let offsetPt0 = new Uint32Array(num_offsets);
-        if (isInt64) {
-          let isOverflowInt32 = false;
-          for (let c = 0; c < num_offsets; c++) {
-            let idx = reader.getInt32(pos, false);
-            if (idx !== 0) isOverflowInt32 = true;
-            pos += 4;
-            idx = reader.getInt32(pos, false);
-            pos += 4;
-            offsetPt0[c] = idx;
-          }
-          if (isOverflowInt32)
-            console.log("int32 overflow: JavaScript does not support int64");
-        } else {
-          for (let c = 0; c < num_offsets; c++) {
-            let idx = reader.getInt32(pos, false);
-            pos += 4;
-            offsetPt0[c] = idx;
-          }
-        }
-        let pts = positions;
-        return {
-          pts,
-          offsetPt0,
-        };
+      if (offset_items.length >= 3) {
+        num_offsets = parseInt(offset_items[2]);
+      } else {
+        num_offsets = n_count;
       }
+
+      let isInt64 = false;
+      if (line.includes("int64")) isInt64 = true;
+
+      let offsetPt0 = new Uint32Array(num_offsets);
+      if (isInt64) {
+        let isOverflowInt32 = false;
+        for (let c = 0; c < num_offsets; c++) {
+          let idx = reader.getInt32(pos, false);
+          if (idx !== 0) isOverflowInt32 = true;
+          pos += 4;
+          idx = reader.getInt32(pos, false);
+          pos += 4;
+          offsetPt0[c] = idx;
+        }
+        if (isOverflowInt32)
+          console.log("int32 overflow: JavaScript does not support int64");
+      } else {
+        for (let c = 0; c < num_offsets; c++) {
+          let idx = reader.getInt32(pos, false);
+          pos += 4;
+          offsetPt0[c] = idx;
+        }
+      }
+      let pts = positions;
+      return {
+        pts,
+        offsetPt0,
+      };
+    }
     pos = posOK; //valid VTK file
     let npt = 0;
     let offsetPt0 = [];
@@ -961,7 +1031,7 @@ function readVTK (buffer) {
     positions,
     indices,
   };
-}; // readVTK()
+} // readVTK()
 
 function getZip64OriginalSizes(zipData) {
   // Parse the ZIP central directory to get correct uncompressed sizes.
@@ -983,7 +1053,7 @@ function getZip64OriginalSizes(zipData) {
 
   // Read a 64-bit little-endian uint as a JS number (safe up to 2^53)
   function getUint64(offset) {
-    const lo = dv.getUint32(offset,     true);
+    const lo = dv.getUint32(offset, true);
     const hi = dv.getUint32(offset + 4, true);
     return hi * 0x100000000 + lo;
   }
@@ -992,22 +1062,26 @@ function getZip64OriginalSizes(zipData) {
   // Stop 22 bytes from end (minimum EOCD size); allow up to 64 KB ZIP comment.
   let eocd = -1;
   for (let i = n - 22; i >= Math.max(0, n - 65558); i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (dv.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
   }
   if (eocd === -1) return sizes;
 
-  let cdCount  = dv.getUint16(eocd + 8,  true);
+  let cdCount = dv.getUint16(eocd + 8, true);
   let cdOffset = dv.getUint32(eocd + 16, true);
 
   // Check for ZIP64 EOCD locator (PK\x06\x07), which must sit exactly 20
   // bytes before the EOCD when no ZIP comment is present, but the ZIP spec
   // only guarantees it precedes the EOCD — scan the last 64 KB for it.
   for (let i = eocd - 20; i >= Math.max(0, eocd - 65558); i--) {
-    if (dv.getUint32(i, true) === 0x07064b50) {          // PK\x06\x07
-      const eocd64off = getUint64(i + 8);                // offset of ZIP64 EOCD
+    if (dv.getUint32(i, true) === 0x07064b50) {
+      // PK\x06\x07
+      const eocd64off = getUint64(i + 8); // offset of ZIP64 EOCD
       if (eocd64off + 56 <= n && dv.getUint32(eocd64off, true) === 0x06064b50) {
-        cdCount  = getUint64(eocd64off + 32);            // 8-byte total entry count
-        cdOffset = getUint64(eocd64off + 48);            // 8-byte CD start offset
+        cdCount = getUint64(eocd64off + 32); // 8-byte total entry count
+        cdOffset = getUint64(eocd64off + 48); // 8-byte CD start offset
       }
       break;
     }
@@ -1018,21 +1092,23 @@ function getZip64OriginalSizes(zipData) {
   for (let i = 0; i < cdCount; i++) {
     if (pos + 46 > n || dv.getUint32(pos, true) !== 0x02014b50) break; // PK\x01\x02
     let origSize = dv.getUint32(pos + 24, true);
-    const fnLen  = dv.getUint16(pos + 28, true);
-    const exLen  = dv.getUint16(pos + 30, true);
-    const cmLen  = dv.getUint16(pos + 32, true);
-    const fname  = new TextDecoder().decode(u8.subarray(pos + 46, pos + 46 + fnLen));
+    const fnLen = dv.getUint16(pos + 28, true);
+    const exLen = dv.getUint16(pos + 30, true);
+    const cmLen = dv.getUint16(pos + 32, true);
+    const fname = new TextDecoder().decode(
+      u8.subarray(pos + 46, pos + 46 + fnLen),
+    );
     // If 0xFFFFFFFF, read real size from ZIP64 extended info extra field (tag 0x0001).
     // The ZIP64 extra field encodes: origSize (8), compSize (8), localOffset (8),
     // diskStart (4) — but only the fields that were 0xFFFFFFFF in the CD are present.
-    if (origSize === 0xFFFFFFFF) {
+    if (origSize === 0xffffffff) {
       let ep = pos + 46 + fnLen;
       const epEnd = ep + exLen;
       while (ep + 4 <= epEnd) {
-        const tag = dv.getUint16(ep,     true);
-        const sz  = dv.getUint16(ep + 2, true);
+        const tag = dv.getUint16(ep, true);
+        const sz = dv.getUint16(ep + 2, true);
         if (tag === 0x0001 && sz >= 8) {
-          origSize = getUint64(ep + 4);  // first 8-byte field is original size
+          origSize = getUint64(ep + 4); // first 8-byte field is original size
           break;
         }
         ep += 4 + sz;
@@ -1062,8 +1138,8 @@ function getZip64OriginalSizes(zipData) {
 async function readTRX(url, urlIsLocalFile = false) {
   //Javascript does not support float16, so we convert to float32
   //https://stackoverflow.com/questions/5678432/decompressing-half-precision-floats-in-javascript
-//intrinsics https://stackoverflow.com/questions/5515333/how-can-i-optimize-conversion-from-half-precision-float16-to-single-precision-fl
-// x86-64: _mm_cvtps_ph/_mm256_cvtps_ph _mm_cvtph_ps/_mm256_cvtph_ps  AR: vcvt
+  //intrinsics https://stackoverflow.com/questions/5515333/how-can-i-optimize-conversion-from-half-precision-float16-to-single-precision-fl
+  // x86-64: _mm_cvtps_ph/_mm256_cvtps_ph _mm_cvtph_ps/_mm256_cvtph_ps  AR: vcvt
   function decodeFloat16(binary) {
     "use strict";
     var exponent = (binary & 0x7c00) >> 10,
@@ -1081,8 +1157,8 @@ async function readTRX(url, urlIsLocalFile = false) {
   } // decodeFloat16()
   let noff = 0;
   let npt = 0;
-  let pts = [];
-  let offsetPt0 = [];
+  let pts = null;
+  let offsetPt0 = null;
   let dpv = [];
   let dps = [];
   let dpg = [];
@@ -1090,200 +1166,225 @@ async function readTRX(url, urlIsLocalFile = false) {
   let header = [];
   let isOverflowUint64 = false;
   let positions_dtype = "float32";
-  let data = [];
+  let data = null;
   function getAlignedArray(constructor, dataArray) {
     const bytes = constructor.BYTES_PER_ELEMENT;
     if (dataArray.byteOffset % bytes === 0) {
-      return new constructor(dataArray.buffer, dataArray.byteOffset, dataArray.byteLength / bytes);
+      return new constructor(
+        dataArray.buffer,
+        dataArray.byteOffset,
+        dataArray.byteLength / bytes,
+      );
     } else {
       return new constructor(dataArray.slice().buffer);
     }
   }
-  if (urlIsLocalFile) {
-    const stats = fs.statSync(url);
-    if (stats.size >= 2 * 1024 * 1024 * 1024) {
-      const size = stats.size;
-      const arrayBuffer = new ArrayBuffer(size);
-      const uint8Array = new Uint8Array(arrayBuffer);
-      const fd = fs.openSync(url, 'r');
-      try {
-        const chunkSize = 512 * 1024 * 1024;
-        let offset = 0;
-        while (offset < size) {
-          const bytesToRead = Math.min(chunkSize, size - offset);
-          const bytesRead = fs.readSync(fd, uint8Array, offset, bytesToRead, offset);
-          if (bytesRead === 0) break;
-          offset += bytesRead;
-        }
-      } finally {
-        fs.closeSync(fd);
-      }
-      data = Buffer.from(arrayBuffer);
-    } else {
-      data = fs.readFileSync(url);
-    }
-  } else {
+  if (!urlIsLocalFile) {
     let response = await fetch(url);
     if (!response.ok) throw Error(response.statusText);
     data = await response.arrayBuffer();
   }
   // Parse the ZIP central directory ourselves: fflate's file.originalSize
   // returns 0xFFFFFFFF for ZIP64 entries instead of reading the ZIP64 extra field.
-  const filesInfo = parseZipCentralDirectory(urlIsLocalFile ? url : data, urlIsLocalFile);
+  const filesInfo = parseZipCentralDirectory(
+    urlIsLocalFile ? url : data,
+    urlIsLocalFile,
+  );
 
   let fd = null;
   if (urlIsLocalFile) {
-    fd = fs.openSync(url, 'r');
+    fd = fs.openSync(url, "r");
   }
 
-  function readEntryData(fileInfo) {
+  try {
+    function readEntryData(fileInfo) {
+      if (fileInfo.origSize === 0) return new Uint8Array(0);
       if (fileInfo.compMethod === 0) {
-          const buffer = new ArrayBuffer(fileInfo.origSize);
-          const u8 = new Uint8Array(buffer);
-          if (urlIsLocalFile) {
-              const chunkSize = 512 * 1024 * 1024;
-              let bytesRead = 0;
-              while (bytesRead < fileInfo.origSize) {
-                  let readSize = Math.min(chunkSize, fileInfo.origSize - bytesRead);
-                  fs.readSync(fd, u8, bytesRead, readSize, fileInfo.dataOffset + bytesRead);
-                  bytesRead += readSize;
-              }
-          } else {
-              const src = new Uint8Array(data, fileInfo.dataOffset, fileInfo.origSize);
-              u8.set(src);
+        const buffer = new ArrayBuffer(fileInfo.origSize);
+        const u8 = new Uint8Array(buffer);
+        if (urlIsLocalFile) {
+          const chunkSize = 512 * 1024 * 1024;
+          let bytesRead = 0;
+          while (bytesRead < fileInfo.origSize) {
+            let readSize = Math.min(chunkSize, fileInfo.origSize - bytesRead);
+            fs.readSync(
+              fd,
+              u8,
+              bytesRead,
+              readSize,
+              fileInfo.dataOffset + bytesRead,
+            );
+            bytesRead += readSize;
           }
-          return u8;
+        } else {
+          const src = new Uint8Array(
+            data,
+            fileInfo.dataOffset,
+            fileInfo.origSize,
+          );
+          u8.set(src);
+        }
+        return u8;
       } else if (fileInfo.compMethod === 8) {
-          const compSize = fileInfo.compSize || fileInfo.origSize;
-          const compressed = new Uint8Array(compSize);
-          if (urlIsLocalFile) {
-              fs.readSync(fd, compressed, 0, compSize, fileInfo.dataOffset);
-          } else {
-              const src = new Uint8Array(data, fileInfo.dataOffset, compSize);
-              compressed.set(src);
-          }
-          return fflate.inflateSync(compressed);
+        const compSize =
+          fileInfo.compSize !== undefined
+            ? fileInfo.compSize
+            : fileInfo.origSize;
+        const compressed = new Uint8Array(compSize);
+        if (urlIsLocalFile) {
+          fs.readSync(fd, compressed, 0, compSize, fileInfo.dataOffset);
+        } else {
+          const src = new Uint8Array(data, fileInfo.dataOffset, compSize);
+          compressed.set(src);
+        }
+        return fflate.inflateSync(compressed);
       } else {
-          throw new Error("Unsupported compression method: " + fileInfo.compMethod);
+        throw new Error(
+          "Unsupported compression method: " + fileInfo.compMethod,
+        );
       }
-  }
+    }
 
-  var keys = Object.keys(filesInfo);
-  for (var i = 0, len = keys.length; i < len; i++) {
-    const key = keys[i];
-    let parts = key.split("/");
-    let fname = parts.slice(-1)[0];
-    if (fname.startsWith(".")) continue;
-    let pname = parts.slice(-2)[0];
-    let tag = fname.split(".")[0];
+    var keys = Object.keys(filesInfo);
+    for (var i = 0, len = keys.length; i < len; i++) {
+      const key = keys[i];
+      let parts = key.split("/");
+      let fname = parts.slice(-1)[0];
+      if (fname.startsWith(".")) continue;
+      let pname = parts.slice(-2)[0];
+      let tag = fname.split(".")[0];
 
-    const fileInfo = filesInfo[key];
-    if (fileInfo.origSize === 0) continue;
+      const fileInfo = filesInfo[key];
 
-    if (fname.includes("header.json")) {
+      if (fname.includes("header.json")) {
+        const entryData = readEntryData(fileInfo);
+        if (entryData.length === 0) {
+          header = {};
+          continue;
+        }
+        let jsonString = new TextDecoder().decode(entryData);
+        if (jsonString.charCodeAt(0) === 0xfeff)
+          jsonString = jsonString.slice(1);
+        header = JSON.parse(jsonString.trim());
+        continue;
+      }
+
       const entryData = readEntryData(fileInfo);
-      let jsonString = new TextDecoder().decode(entryData);
-      if (jsonString.charCodeAt(0) === 0xFEFF) jsonString = jsonString.slice(1);
-      header = JSON.parse(jsonString.trim());
-      continue;
-    }
 
-    const entryData = readEntryData(fileInfo);
-
-    let nval = 0;
-    let vals = [];
-    let data = entryData;
-    if (fname.endsWith(".uint64") || fname.endsWith(".int64")) {
-      nval = data.length / 8; //8 bytes per 64bit input
-      vals = new Uint32Array(nval);
-      const u32 = getAlignedArray(Uint32Array, data);
-      let j = 0;
-      for (let i = 0; i < nval; i++) {
-        vals[i] = u32[j];
-        if (u32[j + 1] !== 0) isOverflowUint64 = true;
-        j += 2;
+      let nval = 0;
+      let vals = [];
+      let entryBuf = entryData;
+      if (fname.endsWith(".uint64") || fname.endsWith(".int64")) {
+        nval = entryBuf.length / 8; //8 bytes per 64bit input
+        vals = new Uint32Array(nval);
+        const u32 = getAlignedArray(Uint32Array, entryBuf);
+        let j = 0;
+        for (let i = 0; i < nval; i++) {
+          vals[i] = u32[j];
+          if (u32[j + 1] !== 0) isOverflowUint64 = true;
+          j += 2;
+        }
+      } else if (fname.endsWith(".uint32")) {
+        vals = getAlignedArray(Uint32Array, entryBuf);
+      } else if (fname.endsWith(".uint16")) {
+        vals = getAlignedArray(Uint16Array, entryBuf);
+      } else if (fname.endsWith(".uint8")) {
+        vals = new Uint8Array(
+          entryBuf.buffer,
+          entryBuf.byteOffset,
+          entryBuf.byteLength,
+        );
+      } else if (fname.endsWith(".int32")) {
+        vals = getAlignedArray(Int32Array, entryBuf);
+      } else if (fname.endsWith(".int16")) {
+        vals = getAlignedArray(Int16Array, entryBuf);
+      } else if (fname.endsWith(".int8")) {
+        vals = new Int8Array(
+          entryBuf.buffer,
+          entryBuf.byteOffset,
+          entryBuf.byteLength,
+        );
+      } else if (fname.endsWith(".float64")) {
+        vals = getAlignedArray(Float64Array, entryBuf);
+      } else if (fname.endsWith(".float32")) {
+        vals = getAlignedArray(Float32Array, entryBuf);
+      } else if (fname.endsWith(".float16")) {
+        nval = entryBuf.length / 2; //2 bytes per 16bit input
+        vals = new Float32Array(nval);
+        const u16 = getAlignedArray(Uint16Array, entryBuf);
+        const lut = new Float32Array(65536);
+        for (let i = 0; i < 65536; i++) lut[i] = decodeFloat16(i);
+        for (let i = 0; i < nval; i++) vals[i] = lut[u16[i]];
+      } else continue; //not a data array
+      nval = vals.length;
+      //next: read data_per_group
+      const dpgIndex = parts.indexOf("dpg");
+      if (dpgIndex !== -1 && parts.length >= dpgIndex + 3) {
+        const groupId = parts[dpgIndex + 1];
+        dpg.push({
+          id: groupId + "/" + tag, // e.g. "AF_R/volume"
+          fname: parts.slice(dpgIndex + 1).join("/"), // e.g. "AF_R/volume.uint32"
+          vals: vals,
+        });
+        continue;
       }
-    } else if (fname.endsWith(".uint32")) {
-      vals = getAlignedArray(Uint32Array, data);
-    } else if (fname.endsWith(".uint16")) {
-      vals = getAlignedArray(Uint16Array, data);
-    } else if (fname.endsWith(".uint8")) {
-      vals = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    } else if (fname.endsWith(".int32")) {
-      vals = getAlignedArray(Int32Array, data);
-    } else if (fname.endsWith(".int16")) {
-      vals = getAlignedArray(Int16Array, data);
-    } else if (fname.endsWith(".int8")) {
-      vals = new Int8Array(data.buffer, data.byteOffset, data.byteLength);
-    } else if (fname.endsWith(".float64")) {
-      vals = getAlignedArray(Float64Array, data);
-    } else if (fname.endsWith(".float32")) {
-      vals = getAlignedArray(Float32Array, data);
-    } else if (fname.endsWith(".float16")) {
-      nval = data.length / 2; //2 bytes per 16bit input
-      vals = new Float32Array(nval);
-      const u16 = getAlignedArray(Uint16Array, data);
-      const lut = new Float32Array(65536)
-      for (let i = 0; i < 65536; i++) lut[i] = decodeFloat16(i)
-      for (let i = 0; i < nval; i++) vals[i] = lut[u16[i]]
-    } else continue; //not a data array
-    nval = vals.length;
-    //next: read data_per_group
-    const dpgIndex = parts.indexOf("dpg");
-    if (dpgIndex !== -1 && parts.length >= dpgIndex + 3) {
-      const groupId = parts[dpgIndex + 1];
-      dpg.push({
-        id: groupId + "/" + tag, // e.g. "AF_R/volume"
-        fname: parts.slice(dpgIndex + 1).join("/"), // e.g. "AF_R/volume.uint32"
-        vals: vals,
-      });
-      continue;
+      //next: read groups
+      if (pname === "groups") {
+        groups.push({
+          id: tag,
+          fname: fname,
+          vals: vals,
+        });
+        continue;
+      }
+      //next: read data_per_vertex
+      if (pname.includes("dpv")) {
+        dpv.push({
+          id: tag,
+          fname: fname,
+          vals: vals,
+        });
+        continue;
+      }
+      //next: read data_per_streamline
+      if (pname.includes("dps")) {
+        dps.push({
+          id: tag,
+          fname: fname,
+          vals: vals,
+        });
+        continue;
+      }
+      //Next: read offsets: Always uint64
+      if (fname.startsWith("offsets.")) {
+        //javascript does not have 64-bit integers! read lower 32-bits
+        noff = nval; //8 bytes per 64bit input
+        //we need to solve the fence post problem, so we can not use slice
+        offsetPt0 = new Uint32Array(nval + 1);
+        for (let i = 0; i < nval; i++) offsetPt0[i] = vals[i];
+      }
+      if (fname.startsWith("positions.3.")) {
+        npt = nval; //4 bytes per 32bit input
+        pts = vals;
+        if (fname.endsWith(".float64")) positions_dtype = "float64";
+        else if (fname.endsWith(".float16")) positions_dtype = "float16";
+        else positions_dtype = "float32";
+      }
     }
-    //next: read groups
-    if (pname === "groups") {
-      groups.push({
-        id: tag,
-        fname: fname,
-        vals: vals,
-      });
-      continue;
-    }
-    //next: read data_per_vertex
-    if (pname.includes("dpv")) {
-      dpv.push({
-        id: tag,
-        fname: fname,
-        vals: vals,
-      });
-      continue;
-    }
-    //next: read data_per_streamline
-    if (pname.includes("dps")) {
-      dps.push({
-        id: tag,
-        fname: fname,
-        vals: vals,
-      });
-      continue;
-    }
-    //Next: read offsets: Always uint64
-    if (fname.startsWith("offsets.")) {
-      //javascript does not have 64-bit integers! read lower 32-bits
-      noff = nval; //8 bytes per 64bit input
-      //we need to solve the fence post problem, so we can not use slice
-      offsetPt0 = new Uint32Array(nval + 1);
-      for (let i = 0; i < nval; i++) offsetPt0[i] = vals[i];
-    }
-    if (fname.startsWith("positions.3.")) {
-      npt = nval; //4 bytes per 32bit input
-      pts = vals;
-      if (fname.endsWith(".float64")) positions_dtype = "float64";
-      else if (fname.endsWith(".float16")) positions_dtype = "float16";
-      else positions_dtype = "float32";
-    }
+  } finally {
+    if (fd) fs.closeSync(fd);
   }
+
   if (isOverflowUint64)
-    throw new Error("Too many vertices: JavaScript does not support 64 bit integers");
+    throw new Error(
+      "Too many vertices: JavaScript does not support 64 bit integers",
+    );
+
+  if (pts === null) pts = new Float32Array(0);
+  if (offsetPt0 === null) {
+    offsetPt0 = new Uint32Array([0]);
+    noff = 0;
+  }
 
   if (offsetPt0[noff - 1] === npt / 3) {
     offsetPt0 = offsetPt0.subarray(0, noff);
@@ -1301,699 +1402,821 @@ async function readTRX(url, urlIsLocalFile = false) {
     header,
     positions_dtype,
   };
-}; // readTRX()
+} // readTRX()
 // Fast float32 to float16 conversion
 const _f16_floatView = new Float32Array(1);
 const _f16_int32View = new Int32Array(_f16_floatView.buffer);
 
 function encodeFloat16(val) {
-    _f16_floatView[0] = val;
-    const f = _f16_int32View[0];
-    
-    const sign = (f >> 16) & 0x8000;
-    let exponent = ((f >> 23) & 0xff) - 127;
-    let mantissa = f & 0x007fffff;
-    
-    if (exponent <= -15) {
-        if (exponent < -24) {
-            return sign; // underflow
-        }
-        mantissa = (mantissa | 0x00800000) >> (-14 - exponent);
-        return sign | (mantissa >> 13);
-    } else if (exponent >= 16) {
-        return sign | 0x7c00; // overflow to infinity
+  _f16_floatView[0] = val;
+  const f = _f16_int32View[0];
+
+  const sign = (f >> 16) & 0x8000;
+  let exponent = ((f >> 23) & 0xff) - 127;
+  let mantissa = f & 0x007fffff;
+
+  if (exponent <= -15) {
+    if (exponent < -24) {
+      return sign; // underflow
     }
-    
-    return sign | ((exponent + 15) << 10) | (mantissa >> 13);
+    mantissa = (mantissa | 0x00800000) >> (-14 - exponent);
+    return sign | (mantissa >> 13);
+  } else if (exponent >= 16) {
+    return sign | 0x7c00; // overflow to infinity
+  }
+
+  return sign | ((exponent + 15) << 10) | (mantissa >> 13);
 }
 
 function float32ToFloat16(float32Array) {
-    const out = new Uint16Array(float32Array.length);
-    for (let i = 0; i < float32Array.length; i++) {
-        out[i] = encodeFloat16(float32Array[i]);
-    }
-    return out;
+  const out = new Uint16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    out[i] = encodeFloat16(float32Array[i]);
+  }
+  return out;
 }
 
 function buildTckHeader(numStreamlines) {
-    let offset = 80;
-    while (true) {
-        let h = `mrtrix tracks\ncount: ${String(numStreamlines).padStart(10, '0')}\ndatatype: Float32LE\nfile: . ${offset}\nEND\n`;
-        if (h.length <= offset) {
-            return h.padEnd(offset, ' ');
-        }
-        offset = h.length;
+  let offset = 80;
+  while (true) {
+    let h = `mrtrix tracks\ncount: ${String(numStreamlines).padStart(10, "0")}\ndatatype: Float32LE\nfile: . ${offset}\nEND\n`;
+    if (h.length <= offset) {
+      return h.padEnd(offset, " ");
     }
+    offset = h.length;
+  }
 }
 
 function saveTCK(filepath, obj) {
-    const fd = fs.openSync(filepath, 'w');
-    const numStreamlines = obj.offsetPt0.length - 1;
-    const header = buildTckHeader(numStreamlines);
-    fs.writeSync(fd, header);
+  const fd = fs.openSync(filepath, "w");
+  const numStreamlines = obj.offsetPt0.length - 1;
+  const header = buildTckHeader(numStreamlines);
+  fs.writeSync(fd, header);
 
-    const chunkSize = 16 * 1024 * 1024; // 16MB buffer
-    const buf = new ArrayBuffer(chunkSize);
-    const view = new DataView(buf);
-    const u8View = new Uint8Array(buf);
+  const chunkSize = 16 * 1024 * 1024; // 16MB buffer
+  const buf = new ArrayBuffer(chunkSize);
+  const view = new DataView(buf);
+  const u8View = new Uint8Array(buf);
 
-    let bufOffset = 0;
-    const pts = obj.pts;
-    const offsets = obj.offsetPt0;
+  let bufOffset = 0;
+  const pts = obj.pts;
+  const offsets = obj.offsetPt0;
 
-    for (let i = 0; i < numStreamlines; i++) {
-        const start = offsets[i];
-        const end = offsets[i+1];
-        
-        for (let j = start; j < end; j++) {
-            if (bufOffset + 12 > chunkSize) {
-                fs.writeSync(fd, u8View, 0, bufOffset);
-                bufOffset = 0;
-            }
-            view.setFloat32(bufOffset, pts[j*3], true);
-            view.setFloat32(bufOffset + 4, pts[j*3 + 1], true);
-            view.setFloat32(bufOffset + 8, pts[j*3 + 2], true);
-            bufOffset += 12;
-        }
-        if (bufOffset + 12 > chunkSize) {
-            fs.writeSync(fd, u8View, 0, bufOffset);
-            bufOffset = 0;
-        }
-        view.setFloat32(bufOffset, NaN, true);
-        view.setFloat32(bufOffset + 4, NaN, true);
-        view.setFloat32(bufOffset + 8, NaN, true);
-        bufOffset += 12;
-    }
+  for (let i = 0; i < numStreamlines; i++) {
+    const start = offsets[i];
+    const end = offsets[i + 1];
 
-    if (bufOffset + 12 > chunkSize) {
+    for (let j = start; j < end; j++) {
+      if (bufOffset + 12 > chunkSize) {
         fs.writeSync(fd, u8View, 0, bufOffset);
         bufOffset = 0;
+      }
+      view.setFloat32(bufOffset, pts[j * 3], true);
+      view.setFloat32(bufOffset + 4, pts[j * 3 + 1], true);
+      view.setFloat32(bufOffset + 8, pts[j * 3 + 2], true);
+      bufOffset += 12;
     }
-    view.setFloat32(bufOffset, Infinity, true);
-    view.setFloat32(bufOffset + 4, Infinity, true);
-    view.setFloat32(bufOffset + 8, Infinity, true);
+    if (bufOffset + 12 > chunkSize) {
+      fs.writeSync(fd, u8View, 0, bufOffset);
+      bufOffset = 0;
+    }
+    view.setFloat32(bufOffset, NaN, true);
+    view.setFloat32(bufOffset + 4, NaN, true);
+    view.setFloat32(bufOffset + 8, NaN, true);
     bufOffset += 12;
+  }
 
-    if (bufOffset > 0) {
-        fs.writeSync(fd, u8View, 0, bufOffset);
-    }
-    fs.closeSync(fd);
+  if (bufOffset + 12 > chunkSize) {
+    fs.writeSync(fd, u8View, 0, bufOffset);
+    bufOffset = 0;
+  }
+  view.setFloat32(bufOffset, Infinity, true);
+  view.setFloat32(bufOffset + 4, Infinity, true);
+  view.setFloat32(bufOffset + 8, Infinity, true);
+  bufOffset += 12;
+
+  if (bufOffset > 0) {
+    fs.writeSync(fd, u8View, 0, bufOffset);
+  }
+  fs.closeSync(fd);
 }
 
 function saveTRK(filepath, obj, originalFilename, refHeader = null) {
-    const fd = fs.openSync(filepath, 'w');
-    const headerBytes = new Uint8Array(1000);
-    const view = new DataView(headerBytes.buffer);
+  const fd = fs.openSync(filepath, "w");
+  const headerBytes = new Uint8Array(1000);
+  const view = new DataView(headerBytes.buffer);
 
-    headerBytes.set([84, 82, 65, 67, 75], 0); // 'TRACK'
-    // voxel_order written after resolvedHeader is loaded (see below)
+  headerBytes.set([84, 82, 65, 67, 75], 0); // 'TRACK'
+  // voxel_order written after resolvedHeader is loaded (see below)
 
-    let dim = [256, 256, 256];
-    let voxelSize = [1, 1, 1];
-    let voxToRas = [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
-    ];
+  let dim = [256, 256, 256];
+  let voxelSize = [1, 1, 1];
+  let voxToRas = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+  ];
 
-    const resolvedHeader = (obj.header && obj.header.VOXEL_TO_RASMM) ? obj.header : refHeader;
-    if (!resolvedHeader) throw new Error("TCK/VTK → TRK requires a reference NIfTI header (pass refHeader)");
-
-    dim = resolvedHeader.DIMENSIONS;
-    voxToRas = resolvedHeader.VOXEL_TO_RASMM;
-    voxelSize = [
-        Math.sqrt(voxToRas[0][0]**2 + voxToRas[1][0]**2 + voxToRas[2][0]**2),
-        Math.sqrt(voxToRas[0][1]**2 + voxToRas[1][1]**2 + voxToRas[2][1]**2),
-        Math.sqrt(voxToRas[0][2]**2 + voxToRas[1][2]**2 + voxToRas[2][2]**2)
-    ];
-
-    // Derive voxel_order from the affine (mirrors nibabel.aff2axcodes / io_orientation)
-    const _order = axcodesFromAffine(voxToRas);
-    headerBytes.set([_order.charCodeAt(0), _order.charCodeAt(1), _order.charCodeAt(2), 0], 948);
-
-    view.setInt16(6, dim[0], true);
-    view.setInt16(8, dim[1], true);
-    view.setInt16(10, dim[2], true);
-
-    view.setFloat32(12, voxelSize[0], true);
-    view.setFloat32(16, voxelSize[1], true);
-    view.setFloat32(20, voxelSize[2], true);
-
-    let off = 440;
-    for (let r = 0; r < 4; r++) {
-        for (let c = 0; c < 4; c++) {
-            view.setFloat32(off, voxToRas[r][c], true);
-            off += 4;
-        }
-    }
-    // Removed hardcoded RAS voxel order to prevent coordinate flipping by Nibabel
-    // Reconstruct the exact readTRK scaling matrix
-    let zoomMat = mat4.fromValues(
-        1 / voxelSize[0], 0, 0, -0.5,
-        0, 1 / voxelSize[1], 0, -0.5,
-        0, 0, 1 / voxelSize[2], -0.5,
-        0, 0, 0, 1
+  const resolvedHeader =
+    obj.header && obj.header.VOXEL_TO_RASMM ? obj.header : refHeader;
+  if (!resolvedHeader)
+    throw new Error(
+      "TCK/VTK → TRK requires a reference NIfTI header (pass refHeader)",
     );
 
-    // Map TRK header to a row-major array matching readTRK behavior
-    let mat = mat4.create();
-    mat[0] = voxToRas[0][0]; mat[1] = voxToRas[0][1]; mat[2] = voxToRas[0][2]; mat[3] = voxToRas[0][3];
-    mat[4] = voxToRas[1][0]; mat[5] = voxToRas[1][1]; mat[6] = voxToRas[1][2]; mat[7] = voxToRas[1][3];
-    mat[8] = voxToRas[2][0]; mat[9] = voxToRas[2][1]; mat[10] = voxToRas[2][2]; mat[11] = voxToRas[2][3];
-    mat[12] = voxToRas[3][0]; mat[13] = voxToRas[3][1]; mat[14] = voxToRas[3][2]; mat[15] = voxToRas[3][3];
+  dim = resolvedHeader.DIMENSIONS;
+  voxToRas = resolvedHeader.VOXEL_TO_RASMM;
+  voxelSize = [
+    Math.sqrt(voxToRas[0][0] ** 2 + voxToRas[1][0] ** 2 + voxToRas[2][0] ** 2),
+    Math.sqrt(voxToRas[0][1] ** 2 + voxToRas[1][1] ** 2 + voxToRas[2][1] ** 2),
+    Math.sqrt(voxToRas[0][2] ** 2 + voxToRas[1][2] ** 2 + voxToRas[2][2] ** 2),
+  ];
 
-    let vox2mmMat = mat4.create();
-    mat4.mul(vox2mmMat, zoomMat, mat);
+  // Derive voxel_order from the affine (mirrors nibabel.aff2axcodes / io_orientation)
+  const _order = axcodesFromAffine(voxToRas);
+  headerBytes.set(
+    [_order.charCodeAt(0), _order.charCodeAt(1), _order.charCodeAt(2), 0],
+    948,
+  );
 
-    // Transpose to column-major for gl-matrix inversion
-    let colMajorVox2mm = mat4.create();
-    mat4.transpose(colMajorVox2mm, vox2mmMat);
+  view.setInt16(6, dim[0], true);
+  view.setInt16(8, dim[1], true);
+  view.setInt16(10, dim[2], true);
 
-    let colMajorMm2trk = mat4.create();
-    mat4.invert(colMajorMm2trk, colMajorVox2mm);
+  view.setFloat32(12, voxelSize[0], true);
+  view.setFloat32(16, voxelSize[1], true);
+  view.setFloat32(20, voxelSize[2], true);
 
-    // Transpose back to row-major for straightforward vector application
-    let mm2trkMat = mat4.create();
-    mat4.transpose(mm2trkMat, colMajorMm2trk);
-
-    const numStreamlines = obj.offsetPt0.length - 1;
-    view.setInt32(988, numStreamlines, true);
-    view.setInt32(992, 2, true);
-    view.setInt32(996, 1000, true);
-
-    fs.writeSync(fd, headerBytes);
-
-    const chunkSize = 16 * 1024;
-    const buf = new ArrayBuffer(chunkSize);
-    const payloadView = new DataView(buf);
-    const u8View = new Uint8Array(buf);
-
-    let bufOffset = 0;
-    const pts = obj.pts;
-    const offsets = obj.offsetPt0;
-
-    for (let i = 0; i < numStreamlines; i++) {
-        const start = offsets[i];
-        const end = offsets[i+1];
-        const n_pts = end - start;
-
-        if (bufOffset + 4 > chunkSize) {
-            fs.writeSync(fd, u8View, 0, bufOffset);
-            bufOffset = 0;
-        }
-        payloadView.setInt32(bufOffset, n_pts, true);
-        bufOffset += 4;
-
-        for (let j = start; j < end; j++) {
-            if (bufOffset + 12 > chunkSize) {
-                fs.writeSync(fd, u8View, 0, bufOffset);
-                bufOffset = 0;
-            }
-            
-            let x = pts[j*3];
-            let y = pts[j*3 + 1];
-            let z = pts[j*3 + 2];
-
-            let vx = x * mm2trkMat[0] + y * mm2trkMat[1] + z * mm2trkMat[2] + mm2trkMat[3];
-            let vy = x * mm2trkMat[4] + y * mm2trkMat[5] + z * mm2trkMat[6] + mm2trkMat[7];
-            let vz = x * mm2trkMat[8] + y * mm2trkMat[9] + z * mm2trkMat[10] + mm2trkMat[11];
-
-            payloadView.setFloat32(bufOffset, vx, true);
-            payloadView.setFloat32(bufOffset + 4, vy, true);
-            payloadView.setFloat32(bufOffset + 8, vz, true);
-            bufOffset += 12;
-        }
+  let off = 440;
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      view.setFloat32(off, voxToRas[r][c], true);
+      off += 4;
     }
+  }
+  // Removed hardcoded RAS voxel order to prevent coordinate flipping by Nibabel
+  // Reconstruct the exact readTRK scaling matrix
+  let zoomMat = mat4.fromValues(
+    1 / voxelSize[0],
+    0,
+    0,
+    -0.5,
+    0,
+    1 / voxelSize[1],
+    0,
+    -0.5,
+    0,
+    0,
+    1 / voxelSize[2],
+    -0.5,
+    0,
+    0,
+    0,
+    1,
+  );
 
-    if (bufOffset > 0) {
+  // Map TRK header to a row-major array matching readTRK behavior
+  let mat = mat4.create();
+  mat[0] = voxToRas[0][0];
+  mat[1] = voxToRas[0][1];
+  mat[2] = voxToRas[0][2];
+  mat[3] = voxToRas[0][3];
+  mat[4] = voxToRas[1][0];
+  mat[5] = voxToRas[1][1];
+  mat[6] = voxToRas[1][2];
+  mat[7] = voxToRas[1][3];
+  mat[8] = voxToRas[2][0];
+  mat[9] = voxToRas[2][1];
+  mat[10] = voxToRas[2][2];
+  mat[11] = voxToRas[2][3];
+  mat[12] = voxToRas[3][0];
+  mat[13] = voxToRas[3][1];
+  mat[14] = voxToRas[3][2];
+  mat[15] = voxToRas[3][3];
+
+  let vox2mmMat = mat4.create();
+  mat4.mul(vox2mmMat, zoomMat, mat);
+
+  // Transpose to column-major for gl-matrix inversion
+  let colMajorVox2mm = mat4.create();
+  mat4.transpose(colMajorVox2mm, vox2mmMat);
+
+  let colMajorMm2trk = mat4.create();
+  mat4.invert(colMajorMm2trk, colMajorVox2mm);
+
+  // Transpose back to row-major for straightforward vector application
+  let mm2trkMat = mat4.create();
+  mat4.transpose(mm2trkMat, colMajorMm2trk);
+
+  const numStreamlines = obj.offsetPt0.length - 1;
+  view.setInt32(988, numStreamlines, true);
+  view.setInt32(992, 2, true);
+  view.setInt32(996, 1000, true);
+
+  fs.writeSync(fd, headerBytes);
+
+  const chunkSize = 16 * 1024;
+  const buf = new ArrayBuffer(chunkSize);
+  const payloadView = new DataView(buf);
+  const u8View = new Uint8Array(buf);
+
+  let bufOffset = 0;
+  const pts = obj.pts;
+  const offsets = obj.offsetPt0;
+
+  for (let i = 0; i < numStreamlines; i++) {
+    const start = offsets[i];
+    const end = offsets[i + 1];
+    const n_pts = end - start;
+
+    if (bufOffset + 4 > chunkSize) {
+      fs.writeSync(fd, u8View, 0, bufOffset);
+      bufOffset = 0;
+    }
+    payloadView.setInt32(bufOffset, n_pts, true);
+    bufOffset += 4;
+
+    for (let j = start; j < end; j++) {
+      if (bufOffset + 12 > chunkSize) {
         fs.writeSync(fd, u8View, 0, bufOffset);
+        bufOffset = 0;
+      }
+
+      let x = pts[j * 3];
+      let y = pts[j * 3 + 1];
+      let z = pts[j * 3 + 2];
+
+      let vx =
+        x * mm2trkMat[0] + y * mm2trkMat[1] + z * mm2trkMat[2] + mm2trkMat[3];
+      let vy =
+        x * mm2trkMat[4] + y * mm2trkMat[5] + z * mm2trkMat[6] + mm2trkMat[7];
+      let vz =
+        x * mm2trkMat[8] + y * mm2trkMat[9] + z * mm2trkMat[10] + mm2trkMat[11];
+
+      payloadView.setFloat32(bufOffset, vx, true);
+      payloadView.setFloat32(bufOffset + 4, vy, true);
+      payloadView.setFloat32(bufOffset + 8, vz, true);
+      bufOffset += 12;
     }
-    fs.closeSync(fd);
+  }
+
+  if (bufOffset > 0) {
+    fs.writeSync(fd, u8View, 0, bufOffset);
+  }
+  fs.closeSync(fd);
 }
 
 function saveVTK(filepath, obj) {
-    const fd = fs.openSync(filepath, 'w');
-    const numStreamlines = obj.offsetPt0.length - 1;
-    const numPoints = obj.pts.length / 3;
+  const fd = fs.openSync(filepath, "w");
+  const numStreamlines = obj.offsetPt0.length - 1;
+  const numPoints = obj.pts.length / 3;
 
-    const header = `# vtk DataFile Version 3.0\nvtk output\nBINARY\nDATASET POLYDATA\nPOINTS ${numPoints} float\n`;
-    fs.writeSync(fd, header);
+  const header = `# vtk DataFile Version 3.0\nvtk output\nBINARY\nDATASET POLYDATA\nPOINTS ${numPoints} float\n`;
+  fs.writeSync(fd, header);
 
-    const pts = obj.pts;
-    const offsets = obj.offsetPt0;
+  const pts = obj.pts;
+  const offsets = obj.offsetPt0;
 
-    const chunkSize = 16 * 1024 * 1024;
-    const buf = new ArrayBuffer(chunkSize);
-    const view = new DataView(buf);
-    const u8View = new Uint8Array(buf);
+  const chunkSize = 16 * 1024 * 1024;
+  const buf = new ArrayBuffer(chunkSize);
+  const view = new DataView(buf);
+  const u8View = new Uint8Array(buf);
 
-    let bufOffset = 0;
-    for (let i = 0; i < numPoints; i++) {
-        if (bufOffset + 12 > chunkSize) {
-            fs.writeSync(fd, u8View, 0, bufOffset);
-            bufOffset = 0;
-        }
-        view.setFloat32(bufOffset, pts[i*3], false); // Big endian
-        view.setFloat32(bufOffset + 4, pts[i*3 + 1], false);
-        view.setFloat32(bufOffset + 8, pts[i*3 + 2], false);
-        bufOffset += 12;
+  let bufOffset = 0;
+  for (let i = 0; i < numPoints; i++) {
+    if (bufOffset + 12 > chunkSize) {
+      fs.writeSync(fd, u8View, 0, bufOffset);
+      bufOffset = 0;
     }
-    if (bufOffset > 0) {
+    view.setFloat32(bufOffset, pts[i * 3], false); // Big endian
+    view.setFloat32(bufOffset + 4, pts[i * 3 + 1], false);
+    view.setFloat32(bufOffset + 8, pts[i * 3 + 2], false);
+    bufOffset += 12;
+  }
+  if (bufOffset > 0) {
+    fs.writeSync(fd, u8View, 0, bufOffset);
+    bufOffset = 0;
+  }
+
+  const cellArraySize = numStreamlines + numPoints;
+  const linesHeader = `LINES ${numStreamlines} ${cellArraySize}\n`;
+  fs.writeSync(fd, linesHeader);
+
+  for (let i = 0; i < numStreamlines; i++) {
+    const start = offsets[i];
+    const end = offsets[i + 1];
+    const n_pts = end - start;
+
+    if (bufOffset + 4 > chunkSize) {
+      fs.writeSync(fd, u8View, 0, bufOffset);
+      bufOffset = 0;
+    }
+    view.setInt32(bufOffset, n_pts, false); // Big endian
+    bufOffset += 4;
+
+    for (let j = start; j < end; j++) {
+      if (bufOffset + 4 > chunkSize) {
         fs.writeSync(fd, u8View, 0, bufOffset);
         bufOffset = 0;
+      }
+      view.setInt32(bufOffset, j, false);
+      bufOffset += 4;
     }
-
-    const cellArraySize = numStreamlines + numPoints;
-    const linesHeader = `LINES ${numStreamlines} ${cellArraySize}\n`;
-    fs.writeSync(fd, linesHeader);
-
-    for (let i = 0; i < numStreamlines; i++) {
-        const start = offsets[i];
-        const end = offsets[i+1];
-        const n_pts = end - start;
-
-        if (bufOffset + 4 > chunkSize) {
-            fs.writeSync(fd, u8View, 0, bufOffset);
-            bufOffset = 0;
-        }
-        view.setInt32(bufOffset, n_pts, false); // Big endian
-        bufOffset += 4;
-
-        for (let j = start; j < end; j++) {
-            if (bufOffset + 4 > chunkSize) {
-                fs.writeSync(fd, u8View, 0, bufOffset);
-                bufOffset = 0;
-            }
-            view.setInt32(bufOffset, j, false);
-            bufOffset += 4;
-        }
-    }
-    if (bufOffset > 0) {
-        fs.writeSync(fd, u8View, 0, bufOffset);
-    }
-    fs.closeSync(fd);
+  }
+  if (bufOffset > 0) {
+    fs.writeSync(fd, u8View, 0, bufOffset);
+  }
+  fs.closeSync(fd);
 }
 
 async function saveTRX(filepath, obj, originalFilename, refHeader = null) {
-    let dtype = obj.positions_dtype || "float32";
-    let ptsData = obj.pts;
-    if (ptsData instanceof Float64Array) {
-        dtype = "float64";
-    }
+  let dtype = obj.positions_dtype || "float32";
+  let ptsData = obj.pts;
+  if (ptsData instanceof Float64Array) {
+    dtype = "float64";
+  }
 
-    if ((originalFilename && originalFilename.includes("f16")) || dtype === "float16") {
-        dtype = "float16";
-        ptsData = float32ToFloat16(obj.pts);
-    } else if (originalFilename && originalFilename.includes("f64")) {
-        dtype = "float64";
-        ptsData = new Float64Array(obj.pts);
-    }
+  if (
+    (originalFilename && originalFilename.includes("f16")) ||
+    dtype === "float16"
+  ) {
+    dtype = "float16";
+    ptsData = float32ToFloat16(obj.pts);
+  } else if (originalFilename && originalFilename.includes("f64")) {
+    dtype = "float64";
+    ptsData = new Float64Array(obj.pts);
+  }
 
-    const numStreamlines = obj.offsetPt0.length - 1;
-    const numPoints = obj.pts.length / 3;
+  const numStreamlines = obj.offsetPt0.length - 1;
+  const numPoints = obj.pts.length / 3;
 
-    let header = {
-        "VOXEL_TO_RASMM": [
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ],
-        "DIMENSIONS": [256, 256, 256],
-        "NB_STREAMLINES": numStreamlines,
-        "NB_VERTICES": numPoints
-    };
+  let header = {
+    VOXEL_TO_RASMM: [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ],
+    DIMENSIONS: [256, 256, 256],
+    NB_STREAMLINES: numStreamlines,
+    NB_VERTICES: numPoints,
+  };
 
-    const resolvedHeader = (obj.header && obj.header.VOXEL_TO_RASMM) ? obj.header : refHeader;
-    if (!resolvedHeader) throw new Error("TCK/VTK → TRX requires a reference NIfTI header (pass refHeader)");
-    header.VOXEL_TO_RASMM = resolvedHeader.VOXEL_TO_RASMM;
-    header.DIMENSIONS = resolvedHeader.DIMENSIONS;
+  const resolvedHeader =
+    obj.header && obj.header.VOXEL_TO_RASMM ? obj.header : refHeader;
+  if (!resolvedHeader)
+    throw new Error(
+      "TCK/VTK → TRX requires a reference NIfTI header (pass refHeader)",
+    );
+  header.VOXEL_TO_RASMM = resolvedHeader.VOXEL_TO_RASMM;
+  header.DIMENSIONS = resolvedHeader.DIMENSIONS;
 
-    const zipObj = {};
-    zipObj["header.json"] = fflate.strToU8(JSON.stringify(header, null, 4));
-    zipObj[`positions.3.${dtype}`] = new Uint8Array(ptsData.buffer, ptsData.byteOffset, ptsData.byteLength);
-    
-    let offsetDtype = "uint32";
-    let offsetData = obj.offsetPt0.subarray ? obj.offsetPt0.subarray(0, numStreamlines + 1) : obj.offsetPt0.slice(0, numStreamlines + 1);
-    if (originalFilename && originalFilename.includes("ui64")) {
-        offsetDtype = "uint64";
-        const u64Bytes = new Uint8Array((numStreamlines + 1) * 8);
-        const view = new DataView(u64Bytes.buffer);
-        for (let i = 0; i <= numStreamlines; i++) {
-            view.setUint32(i * 8, offsetData[i], true);
-            view.setUint32(i * 8 + 4, 0, true);
-        }
-        zipObj[`offsets.${offsetDtype}`] = u64Bytes;
-    } else {
-        zipObj[`offsets.${offsetDtype}`] = new Uint8Array(offsetData.buffer, offsetData.byteOffset, offsetData.byteLength);
-    }
-    
-    function getDtypeExt(vals) {
-        if (vals instanceof Float64Array) return 'float64';
-        if (vals instanceof Float32Array) return 'float32';
-        if (vals instanceof Uint32Array) return 'uint32';
-        if (vals instanceof Int32Array) return 'int32';
-        if (vals instanceof Uint16Array) return 'uint16';
-        if (vals instanceof Int16Array) return 'int16';
-        if (vals instanceof Uint8Array) return 'uint8';
-        if (vals instanceof Int8Array) return 'int8';
-        return 'float32';
-    }
+  const zipObj = {};
+  zipObj["header.json"] = fflate.strToU8(JSON.stringify(header, null, 4));
+  zipObj[`positions.3.${dtype}`] = new Uint8Array(
+    ptsData.buffer,
+    ptsData.byteOffset,
+    ptsData.byteLength,
+  );
 
-    function getCorrectFname(prop) {
-        let name = prop.fname || prop.id;
-        let parts = name.split('.');
-        let ext = getDtypeExt(prop.vals);
-        if (parts.length >= 2) {
-            parts[parts.length - 1] = ext;
-            return parts.join('.');
-        }
-        return name + '.' + ext;
+  let offsetDtype = "uint32";
+  let offsetData = obj.offsetPt0.subarray
+    ? obj.offsetPt0.subarray(0, numStreamlines + 1)
+    : obj.offsetPt0.slice(0, numStreamlines + 1);
+  if (originalFilename && originalFilename.includes("ui64")) {
+    offsetDtype = "uint64";
+    const u64Bytes = new Uint8Array((numStreamlines + 1) * 8);
+    const view = new DataView(u64Bytes.buffer);
+    for (let i = 0; i <= numStreamlines; i++) {
+      view.setUint32(i * 8, offsetData[i], true);
+      view.setUint32(i * 8 + 4, 0, true);
     }
+    zipObj[`offsets.${offsetDtype}`] = u64Bytes;
+  } else {
+    zipObj[`offsets.${offsetDtype}`] = new Uint8Array(
+      offsetData.buffer,
+      offsetData.byteOffset,
+      offsetData.byteLength,
+    );
+  }
 
-    if (obj.dpv) {
-        for (let prop of obj.dpv) {
-            zipObj[`dpv/${getCorrectFname(prop)}`] = new Uint8Array(prop.vals.buffer, prop.vals.byteOffset, prop.vals.byteLength);
-        }
-    }
-    if (obj.dps) {
-        for (let prop of obj.dps) {
-            zipObj[`dps/${getCorrectFname(prop)}`] = new Uint8Array(prop.vals.buffer, prop.vals.byteOffset, prop.vals.byteLength);
-        }
-    }
-    if (obj.dpg) {
-        for (let prop of obj.dpg) {
-            zipObj[`dpg/${getCorrectFname(prop)}`] = new Uint8Array(prop.vals.buffer, prop.vals.byteOffset, prop.vals.byteLength);
-        }
-    }
-    if (obj.groups) {
-        for (let prop of obj.groups) {
-            zipObj[`groups/${getCorrectFname(prop)}`] = new Uint8Array(prop.vals.buffer, prop.vals.byteOffset, prop.vals.byteLength);
-        }
-    }
-    // Optionally save extra header files
-    if (obj.header && obj.header.extraFiles) {
-        for (const [fname, content] of Object.entries(obj.header.extraFiles)) {
-            zipObj[fname] = content;
-        }
-    }
+  function getDtypeExt(vals) {
+    if (vals instanceof Float64Array) return "float64";
+    if (vals instanceof Float32Array) return "float32";
+    if (vals instanceof Uint32Array) return "uint32";
+    if (vals instanceof Int32Array) return "int32";
+    if (vals instanceof Uint16Array) return "uint16";
+    if (vals instanceof Int16Array) return "int16";
+    if (vals instanceof Uint8Array) return "uint8";
+    if (vals instanceof Int8Array) return "int8";
+    return "float32";
+  }
 
-    if (typeof window === "undefined") {
-        // NodeJS
-        return await writeZip64Stream(filepath, zipObj);
-    } else {
-        // Browser
-        const zipped = fflate.zipSync(zipObj, { level: 0 });
-        const blob = new Blob([zipped], { type: "application/zip" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filepath.split("/").pop();
-        a.click();
-        URL.revokeObjectURL(url);
+  function getCorrectFname(prop) {
+    let name = prop.fname || prop.id;
+    let parts = name.split(".");
+    let ext = getDtypeExt(prop.vals);
+    if (parts.length >= 2) {
+      parts[parts.length - 1] = ext;
+      return parts.join(".");
     }
+    return name + "." + ext;
+  }
+
+  if (obj.dpv) {
+    for (let prop of obj.dpv) {
+      zipObj[`dpv/${getCorrectFname(prop)}`] = new Uint8Array(
+        prop.vals.buffer,
+        prop.vals.byteOffset,
+        prop.vals.byteLength,
+      );
+    }
+  }
+  if (obj.dps) {
+    for (let prop of obj.dps) {
+      zipObj[`dps/${getCorrectFname(prop)}`] = new Uint8Array(
+        prop.vals.buffer,
+        prop.vals.byteOffset,
+        prop.vals.byteLength,
+      );
+    }
+  }
+  if (obj.dpg) {
+    for (let prop of obj.dpg) {
+      zipObj[`dpg/${getCorrectFname(prop)}`] = new Uint8Array(
+        prop.vals.buffer,
+        prop.vals.byteOffset,
+        prop.vals.byteLength,
+      );
+    }
+  }
+  if (obj.groups) {
+    for (let prop of obj.groups) {
+      zipObj[`groups/${getCorrectFname(prop)}`] = new Uint8Array(
+        prop.vals.buffer,
+        prop.vals.byteOffset,
+        prop.vals.byteLength,
+      );
+    }
+  }
+  // Optionally save extra header files
+  if (obj.header && obj.header.extraFiles) {
+    for (const [fname, content] of Object.entries(obj.header.extraFiles)) {
+      zipObj[fname] = content;
+    }
+  }
+
+  if (typeof window === "undefined") {
+    // NodeJS
+    return await writeZip64Stream(filepath, zipObj);
+  } else {
+    // Browser
+    const zipped = fflate.zipSync(zipObj, { level: 0 });
+    const blob = new Blob([zipped], { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filepath.split("/").pop();
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function readNiftiHeader(niftiPath) {
-    if (!fs.existsSync(niftiPath)) {
-        throw new Error("NIfTI file not found: " + niftiPath);
-    }
-    const buffer = fs.readFileSync(niftiPath);
-    if (buffer.byteLength < 4) {
-        throw new Error("Invalid NIfTI file: too small to contain header size");
-    }
-    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    const sizeof_hdr = view.getInt32(0, true);
+  if (!fs.existsSync(niftiPath)) {
+    throw new Error("NIfTI file not found: " + niftiPath);
+  }
+  const buffer = fs.readFileSync(niftiPath);
+  if (buffer.byteLength < 4) {
+    throw new Error("Invalid NIfTI file: too small to contain header size");
+  }
+  const view = new DataView(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.byteLength,
+  );
+  const sizeof_hdr = view.getInt32(0, true);
 
-    let isNifti1 = false;
-    let isNifti2 = false;
-    if (sizeof_hdr === 348) {
-        if (buffer.byteLength < 348) throw new Error("Invalid NIfTI file: file smaller than expected NIfTI-1 header");
-        isNifti1 = true;
-    } else if (sizeof_hdr === 540) {
-        if (buffer.byteLength < 540) throw new Error("Invalid NIfTI file: file smaller than expected NIfTI-2 header");
-        isNifti2 = true;
-    } else {
-        throw new Error("Invalid NIfTI file: unknown sizeof_hdr " + sizeof_hdr);
-    }
+  let isNifti1 = false;
+  let isNifti2 = false;
+  if (sizeof_hdr === 348) {
+    if (buffer.byteLength < 348)
+      throw new Error(
+        "Invalid NIfTI file: file smaller than expected NIfTI-1 header",
+      );
+    isNifti1 = true;
+  } else if (sizeof_hdr === 540) {
+    if (buffer.byteLength < 540)
+      throw new Error(
+        "Invalid NIfTI file: file smaller than expected NIfTI-2 header",
+      );
+    isNifti2 = true;
+  } else {
+    throw new Error("Invalid NIfTI file: unknown sizeof_hdr " + sizeof_hdr);
+  }
 
-    let dim = [];
-    let pixdim = [];
-    let qform_code, sform_code;
-    let quatern_b, quatern_c, quatern_d;
-    let qoffset_x, qoffset_y, qoffset_z;
-    let srow_x = [], srow_y = [], srow_z = [];
+  let dim = [];
+  let pixdim = [];
+  let qform_code, sform_code;
+  let quatern_b, quatern_c, quatern_d;
+  let qoffset_x, qoffset_y, qoffset_z;
+  let srow_x = [],
+    srow_y = [],
+    srow_z = [];
 
-    if (isNifti1) {
-        for(let i=0; i<8; i++) dim.push(view.getInt16(40 + i*2, true));
-        for(let i=0; i<8; i++) pixdim.push(view.getFloat32(76 + i*4, true));
-        qform_code = view.getInt16(252, true);
-        sform_code = view.getInt16(254, true);
-        quatern_b = view.getFloat32(256, true);
-        quatern_c = view.getFloat32(260, true);
-        quatern_d = view.getFloat32(264, true);
-        qoffset_x = view.getFloat32(268, true);
-        qoffset_y = view.getFloat32(272, true);
-        qoffset_z = view.getFloat32(276, true);
-        for(let i=0; i<4; i++) srow_x.push(view.getFloat32(280 + i*4, true));
-        for(let i=0; i<4; i++) srow_y.push(view.getFloat32(296 + i*4, true));
-        for(let i=0; i<4; i++) srow_z.push(view.getFloat32(312 + i*4, true));
-    } else {
-        for(let i=0; i<8; i++) dim.push(Number(view.getBigInt64(16 + i*8, true)));
-        for(let i=0; i<8; i++) pixdim.push(view.getFloat64(80 + i*8, true));
-        qform_code = view.getInt32(344, true);
-        sform_code = view.getInt32(348, true);
-        quatern_b = view.getFloat64(352, true);
-        quatern_c = view.getFloat64(360, true);
-        quatern_d = view.getFloat64(368, true);
-        qoffset_x = view.getFloat64(376, true);
-        qoffset_y = view.getFloat64(384, true);
-        qoffset_z = view.getFloat64(392, true);
-        for(let i=0; i<4; i++) srow_x.push(view.getFloat64(400 + i*8, true));
-        for(let i=0; i<4; i++) srow_y.push(view.getFloat64(432 + i*8, true));
-        for(let i=0; i<4; i++) srow_z.push(view.getFloat64(464 + i*8, true));
-    }
+  if (isNifti1) {
+    for (let i = 0; i < 8; i++) dim.push(view.getInt16(40 + i * 2, true));
+    for (let i = 0; i < 8; i++) pixdim.push(view.getFloat32(76 + i * 4, true));
+    qform_code = view.getInt16(252, true);
+    sform_code = view.getInt16(254, true);
+    quatern_b = view.getFloat32(256, true);
+    quatern_c = view.getFloat32(260, true);
+    quatern_d = view.getFloat32(264, true);
+    qoffset_x = view.getFloat32(268, true);
+    qoffset_y = view.getFloat32(272, true);
+    qoffset_z = view.getFloat32(276, true);
+    for (let i = 0; i < 4; i++) srow_x.push(view.getFloat32(280 + i * 4, true));
+    for (let i = 0; i < 4; i++) srow_y.push(view.getFloat32(296 + i * 4, true));
+    for (let i = 0; i < 4; i++) srow_z.push(view.getFloat32(312 + i * 4, true));
+  } else {
+    for (let i = 0; i < 8; i++)
+      dim.push(Number(view.getBigInt64(16 + i * 8, true)));
+    for (let i = 0; i < 8; i++) pixdim.push(view.getFloat64(80 + i * 8, true));
+    qform_code = view.getInt32(344, true);
+    sform_code = view.getInt32(348, true);
+    quatern_b = view.getFloat64(352, true);
+    quatern_c = view.getFloat64(360, true);
+    quatern_d = view.getFloat64(368, true);
+    qoffset_x = view.getFloat64(376, true);
+    qoffset_y = view.getFloat64(384, true);
+    qoffset_z = view.getFloat64(392, true);
+    for (let i = 0; i < 4; i++) srow_x.push(view.getFloat64(400 + i * 8, true));
+    for (let i = 0; i < 4; i++) srow_y.push(view.getFloat64(432 + i * 8, true));
+    for (let i = 0; i < 4; i++) srow_z.push(view.getFloat64(464 + i * 8, true));
+  }
 
-    let DIMENSIONS = [dim[1], dim[2], dim[3]];
-    let VOXEL_TO_RASMM = [];
+  let DIMENSIONS = [dim[1], dim[2], dim[3]];
+  let VOXEL_TO_RASMM = [];
 
-    if (sform_code > 0) {
-        VOXEL_TO_RASMM = [srow_x, srow_y, srow_z, [0, 0, 0, 1]];
-    } else if (qform_code > 0) {
-        let b = quatern_b;
-        let c = quatern_c;
-        let d = quatern_d;
-        let a = Math.sqrt(Math.max(0, 1.0 - (b*b + c*c + d*d)));
-        let qfac = pixdim[0] === 0 ? 1 : pixdim[0];
-        let dx = pixdim[1];
-        let dy = pixdim[2];
-        let dz = pixdim[3];
+  if (sform_code > 0) {
+    VOXEL_TO_RASMM = [srow_x, srow_y, srow_z, [0, 0, 0, 1]];
+  } else if (qform_code > 0) {
+    let b = quatern_b;
+    let c = quatern_c;
+    let d = quatern_d;
+    let a = Math.sqrt(Math.max(0, 1.0 - (b * b + c * c + d * d)));
+    let qfac = pixdim[0] === 0 ? 1 : pixdim[0];
+    let dx = pixdim[1];
+    let dy = pixdim[2];
+    let dz = pixdim[3];
 
-        let R00 = a*a + b*b - c*c - d*d;
-        let R01 = 2*(b*c - a*d);
-        let R02 = 2*(b*d + a*c);
-        let R10 = 2*(b*c + a*d);
-        let R11 = a*a + c*c - b*b - d*d;
-        let R12 = 2*(c*d - a*b);
-        let R20 = 2*(b*d - a*c);
-        let R21 = 2*(c*d + a*b);
-        let R22 = a*a + d*d - c*c - b*b;
+    let R00 = a * a + b * b - c * c - d * d;
+    let R01 = 2 * (b * c - a * d);
+    let R02 = 2 * (b * d + a * c);
+    let R10 = 2 * (b * c + a * d);
+    let R11 = a * a + c * c - b * b - d * d;
+    let R12 = 2 * (c * d - a * b);
+    let R20 = 2 * (b * d - a * c);
+    let R21 = 2 * (c * d + a * b);
+    let R22 = a * a + d * d - c * c - b * b;
 
-        VOXEL_TO_RASMM = [
-            [R00 * dx, R01 * dy, R02 * qfac * dz, qoffset_x],
-            [R10 * dx, R11 * dy, R12 * qfac * dz, qoffset_y],
-            [R20 * dx, R21 * dy, R22 * qfac * dz, qoffset_z],
-            [0, 0, 0, 1]
-        ];
-    } else {
-        throw new Error("NIfTI file has no valid spatial transform");
-    }
+    VOXEL_TO_RASMM = [
+      [R00 * dx, R01 * dy, R02 * qfac * dz, qoffset_x],
+      [R10 * dx, R11 * dy, R12 * qfac * dz, qoffset_y],
+      [R20 * dx, R21 * dy, R22 * qfac * dz, qoffset_z],
+      [0, 0, 0, 1],
+    ];
+  } else {
+    throw new Error("NIfTI file has no valid spatial transform");
+  }
 
-    return { DIMENSIONS, VOXEL_TO_RASMM };
+  return { DIMENSIONS, VOXEL_TO_RASMM };
 }
 
 async function writeZip64Stream(filepath, files) {
-    const writeStream = fs.createWriteStream(filepath, { highWaterMark: 4 * 1024 * 1024 });
+  const writeStream = fs.createWriteStream(filepath, {
+    highWaterMark: 4 * 1024 * 1024,
+  });
 
-    async function writeChunk(buf) {
-        if (!writeStream.write(buf)) {
-            await new Promise((resolve, reject) => {
-                const onDrain = () => {
-                    writeStream.off('error', onError);
-                    resolve();
-                };
-                const onError = (err) => {
-                    writeStream.off('drain', onDrain);
-                    reject(err);
-                };
-                writeStream.once('drain', onDrain);
-                writeStream.once('error', onError);
-            });
-        }
+  async function writeChunk(buf) {
+    if (!writeStream.write(buf)) {
+      await new Promise((resolve, reject) => {
+        const onDrain = () => {
+          writeStream.off("error", onError);
+          resolve();
+        };
+        const onError = (err) => {
+          writeStream.off("drain", onDrain);
+          reject(err);
+        };
+        writeStream.once("drain", onDrain);
+        writeStream.once("error", onError);
+      });
+    }
+  }
+
+  let offset = BigInt(0); // Use BigInt for >4GB offsets
+  const centralDirectory = [];
+
+  for (const [filename, data] of Object.entries(files)) {
+    const nameBuf = Buffer.from(filename);
+    const nameLen = nameBuf.length;
+    const size = BigInt(data.byteLength || data.length);
+    const useZip64 = size >= BigInt(0xffffffff) || offset >= BigInt(0xffffffff);
+    const dataU8 = new Uint8Array(
+      data.buffer || data,
+      data.byteOffset || 0,
+      data.byteLength || data.length,
+    );
+    const crc = nativeCrc32(dataU8);
+
+    // Write Local File Header
+    const lfhBuf = Buffer.alloc(30 + nameLen + (useZip64 ? 20 : 0));
+    lfhBuf.writeUInt32LE(0x04034b50, 0); // LFH signature
+    lfhBuf.writeUInt16LE(useZip64 ? 45 : 20, 4); // Version needed to extract
+    lfhBuf.writeUInt16LE(0, 6); // General purpose bit flag
+    lfhBuf.writeUInt16LE(0, 8); // Compression method (0 = stored)
+    lfhBuf.writeUInt16LE(0, 10); // Last mod file time
+    lfhBuf.writeUInt16LE(0, 12); // Last mod file date
+    lfhBuf.writeUInt32LE(crc, 14); // CRC-32
+
+    if (useZip64) {
+      lfhBuf.writeUInt32LE(0xffffffff, 18); // Compressed size
+      lfhBuf.writeUInt32LE(0xffffffff, 22); // Uncompressed size
+      lfhBuf.writeUInt16LE(nameLen, 26); // File name length
+      lfhBuf.writeUInt16LE(20, 28); // Extra field length
+      nameBuf.copy(lfhBuf, 30);
+
+      // ZIP64 Extra Field
+      lfhBuf.writeUInt16LE(0x0001, 30 + nameLen);
+      lfhBuf.writeUInt16LE(16, 32 + nameLen);
+      lfhBuf.writeBigUInt64LE(size, 34 + nameLen); // Uncompressed size
+      lfhBuf.writeBigUInt64LE(size, 42 + nameLen); // Compressed size
+    } else {
+      lfhBuf.writeUInt32LE(Number(size), 18); // Compressed size
+      lfhBuf.writeUInt32LE(Number(size), 22); // Uncompressed size
+      lfhBuf.writeUInt16LE(nameLen, 26); // File name length
+      lfhBuf.writeUInt16LE(0, 28); // Extra field length
+      nameBuf.copy(lfhBuf, 30);
     }
 
-    let offset = BigInt(0); // Use BigInt for >4GB offsets
-    const centralDirectory = [];
+    await writeChunk(lfhBuf);
 
-    for (const [filename, data] of Object.entries(files)) {
-        const nameBuf = Buffer.from(filename);
-        const nameLen = nameBuf.length;
-        const size = BigInt(data.byteLength || data.length);
-        const useZip64 = size >= BigInt(0xFFFFFFFF) || offset >= BigInt(0xFFFFFFFF);
-        const dataU8 = new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength || data.length);
-        const crc = nativeCrc32(dataU8);
-
-        // Write Local File Header
-        const lfhBuf = Buffer.alloc(30 + nameLen + (useZip64 ? 20 : 0));
-        lfhBuf.writeUInt32LE(0x04034b50, 0); // LFH signature
-        lfhBuf.writeUInt16LE(useZip64 ? 45 : 20, 4); // Version needed to extract
-        lfhBuf.writeUInt16LE(0, 6); // General purpose bit flag
-        lfhBuf.writeUInt16LE(0, 8); // Compression method (0 = stored)
-        lfhBuf.writeUInt16LE(0, 10); // Last mod file time
-        lfhBuf.writeUInt16LE(0, 12); // Last mod file date
-        lfhBuf.writeUInt32LE(crc, 14); // CRC-32
-
-        if (useZip64) {
-            lfhBuf.writeUInt32LE(0xFFFFFFFF, 18); // Compressed size
-            lfhBuf.writeUInt32LE(0xFFFFFFFF, 22); // Uncompressed size
-            lfhBuf.writeUInt16LE(nameLen, 26); // File name length
-            lfhBuf.writeUInt16LE(20, 28); // Extra field length
-            nameBuf.copy(lfhBuf, 30);
-
-            // ZIP64 Extra Field
-            lfhBuf.writeUInt16LE(0x0001, 30 + nameLen);
-            lfhBuf.writeUInt16LE(16, 32 + nameLen);
-            lfhBuf.writeBigUInt64LE(size, 34 + nameLen); // Uncompressed size
-            lfhBuf.writeBigUInt64LE(size, 42 + nameLen); // Compressed size
-        } else {
-            lfhBuf.writeUInt32LE(Number(size), 18); // Compressed size
-            lfhBuf.writeUInt32LE(Number(size), 22); // Uncompressed size
-            lfhBuf.writeUInt16LE(nameLen, 26); // File name length
-            lfhBuf.writeUInt16LE(0, 28); // Extra field length
-            nameBuf.copy(lfhBuf, 30);
-        }
-
-        await writeChunk(lfhBuf);
-
-        // Write file data chunk by chunk (4 MB chunks)
-        const CHUNK_SIZE = 4 * 1024 * 1024;
-        let pos = 0;
-        while (pos < dataU8.length) {
-            const end = Math.min(pos + CHUNK_SIZE, dataU8.length);
-            await writeChunk(dataU8.subarray(pos, end));
-            pos = end;
-        }
-
-        centralDirectory.push({
-            filename: nameBuf,
-            size: size,
-            offset: offset,
-            crc: crc
-        });
-
-        offset += BigInt(lfhBuf.length) + size;
+    // Write file data chunk by chunk (4 MB chunks)
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+    let pos = 0;
+    while (pos < dataU8.length) {
+      const end = Math.min(pos + CHUNK_SIZE, dataU8.length);
+      await writeChunk(dataU8.subarray(pos, end));
+      pos = end;
     }
 
-    const cdStart = offset;
-    let cdSize = BigInt(0);
-
-    for (const file of centralDirectory) {
-        const nameLen = file.filename.length;
-        const useZip64 = file.size >= BigInt(0xFFFFFFFF) || file.offset >= BigInt(0xFFFFFFFF);
-
-        let extraFieldLength = 0;
-        if (useZip64) {
-            extraFieldLength += 4;
-            if (file.size >= BigInt(0xFFFFFFFF)) extraFieldLength += 16;
-            if (file.offset >= BigInt(0xFFFFFFFF)) extraFieldLength += 8;
-        }
-
-        const cdBuf = Buffer.alloc(46 + nameLen + extraFieldLength);
-        cdBuf.writeUInt32LE(0x02014b50, 0); // CD signature
-        cdBuf.writeUInt16LE(45, 4); // Version made by
-        cdBuf.writeUInt16LE(useZip64 ? 45 : 20, 6); // Version needed to extract
-        cdBuf.writeUInt16LE(0, 8); // General purpose bit flag
-        cdBuf.writeUInt16LE(0, 10); // Compression method
-        cdBuf.writeUInt16LE(0, 12); // Last mod file time
-        cdBuf.writeUInt16LE(0, 14); // Last mod file date
-        cdBuf.writeUInt32LE(file.crc, 16); // CRC-32
-
-        cdBuf.writeUInt32LE(file.size >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.size), 20); // Compressed size
-        cdBuf.writeUInt32LE(file.size >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.size), 24); // Uncompressed size
-        cdBuf.writeUInt16LE(nameLen, 28); // File name length
-        cdBuf.writeUInt16LE(extraFieldLength, 30); // Extra field length
-        cdBuf.writeUInt16LE(0, 32); // File comment length
-        cdBuf.writeUInt16LE(0, 34); // Disk number start
-        cdBuf.writeUInt16LE(0, 36); // Internal file attributes
-        cdBuf.writeUInt32LE(0, 38); // External file attributes
-        cdBuf.writeUInt32LE(file.offset >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(file.offset), 42); // Relative offset of LFH
-
-        file.filename.copy(cdBuf, 46);
-
-        if (useZip64) {
-            let pos = 46 + nameLen;
-            cdBuf.writeUInt16LE(0x0001, pos); // Tag
-            cdBuf.writeUInt16LE(extraFieldLength - 4, pos + 2); // Size
-            pos += 4;
-            if (file.size >= BigInt(0xFFFFFFFF)) {
-                cdBuf.writeBigUInt64LE(file.size, pos);
-                cdBuf.writeBigUInt64LE(file.size, pos + 8);
-                pos += 16;
-            }
-            if (file.offset >= BigInt(0xFFFFFFFF)) {
-                cdBuf.writeBigUInt64LE(file.offset, pos);
-            }
-        }
-
-        await writeChunk(cdBuf);
-        cdSize += BigInt(cdBuf.length);
-    }
-
-    const totalEntries = BigInt(centralDirectory.length);
-    const useZip64Eocd = totalEntries >= BigInt(0xFFFF) || cdStart >= BigInt(0xFFFFFFFF) || cdSize >= BigInt(0xFFFFFFFF);
-
-    if (useZip64Eocd) {
-        // ZIP64 EOCD
-        const eocd64Buf = Buffer.alloc(56);
-        eocd64Buf.writeUInt32LE(0x06064b50, 0); // ZIP64 EOCD signature
-        eocd64Buf.writeBigUInt64LE(BigInt(44), 4); // Size of ZIP64 EOCD record
-        eocd64Buf.writeUInt16LE(45, 12); // Version made by
-        eocd64Buf.writeUInt16LE(45, 14); // Version needed to extract
-        eocd64Buf.writeUInt32LE(0, 16); // Number of this disk
-        eocd64Buf.writeUInt32LE(0, 20); // Disk where CD starts
-        eocd64Buf.writeBigUInt64LE(totalEntries, 24); // Number of CD records on this disk
-        eocd64Buf.writeBigUInt64LE(totalEntries, 32); // Total number of CD records
-        eocd64Buf.writeBigUInt64LE(cdSize, 40); // Size of CD
-        eocd64Buf.writeBigUInt64LE(cdStart, 48); // Offset of start of CD
-        await writeChunk(eocd64Buf);
-
-        // ZIP64 EOCD Locator
-        const locBuf = Buffer.alloc(20);
-        locBuf.writeUInt32LE(0x07064b50, 0); // ZIP64 EOCD locator signature
-        locBuf.writeUInt32LE(0, 4); // Number of the disk with the start of the zip64 end of central directory
-        locBuf.writeBigUInt64LE(offset + cdSize, 8); // Relative offset of the zip64 end of central directory record
-        locBuf.writeUInt32LE(1, 16); // Total number of disks
-        await writeChunk(locBuf);
-    }
-
-    // Standard EOCD
-    const eocdBuf = Buffer.alloc(22);
-    eocdBuf.writeUInt32LE(0x06054b50, 0); // EOCD signature
-    eocdBuf.writeUInt16LE(0, 4); // Number of this disk
-    eocdBuf.writeUInt16LE(0, 6); // Disk where CD starts
-    eocdBuf.writeUInt16LE(totalEntries >= BigInt(0xFFFF) ? 0xFFFF : Number(totalEntries), 8); // Number of CD records on this disk
-    eocdBuf.writeUInt16LE(totalEntries >= BigInt(0xFFFF) ? 0xFFFF : Number(totalEntries), 10); // Total number of CD records
-    eocdBuf.writeUInt32LE(cdSize >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(cdSize), 12); // Size of CD
-    eocdBuf.writeUInt32LE(cdStart >= BigInt(0xFFFFFFFF) ? 0xFFFFFFFF : Number(cdStart), 16); // Offset of start of CD
-    eocdBuf.writeUInt16LE(0, 20); // ZIP file comment length
-    await writeChunk(eocdBuf);
-
-    await new Promise((resolve, reject) => {
-        writeStream.on('finish', resolve);
-        writeStream.on('error', reject);
-        writeStream.end();
+    centralDirectory.push({
+      filename: nameBuf,
+      size: size,
+      offset: offset,
+      crc: crc,
     });
+
+    offset += BigInt(lfhBuf.length) + size;
+  }
+
+  const cdStart = offset;
+  let cdSize = BigInt(0);
+
+  for (const file of centralDirectory) {
+    const nameLen = file.filename.length;
+    const useZip64 =
+      file.size >= BigInt(0xffffffff) || file.offset >= BigInt(0xffffffff);
+
+    let extraFieldLength = 0;
+    if (useZip64) {
+      extraFieldLength += 4;
+      if (file.size >= BigInt(0xffffffff)) extraFieldLength += 16;
+      if (file.offset >= BigInt(0xffffffff)) extraFieldLength += 8;
+    }
+
+    const cdBuf = Buffer.alloc(46 + nameLen + extraFieldLength);
+    cdBuf.writeUInt32LE(0x02014b50, 0); // CD signature
+    cdBuf.writeUInt16LE(45, 4); // Version made by
+    cdBuf.writeUInt16LE(useZip64 ? 45 : 20, 6); // Version needed to extract
+    cdBuf.writeUInt16LE(0, 8); // General purpose bit flag
+    cdBuf.writeUInt16LE(0, 10); // Compression method
+    cdBuf.writeUInt16LE(0, 12); // Last mod file time
+    cdBuf.writeUInt16LE(0, 14); // Last mod file date
+    cdBuf.writeUInt32LE(file.crc, 16); // CRC-32
+
+    cdBuf.writeUInt32LE(
+      file.size >= BigInt(0xffffffff) ? 0xffffffff : Number(file.size),
+      20,
+    ); // Compressed size
+    cdBuf.writeUInt32LE(
+      file.size >= BigInt(0xffffffff) ? 0xffffffff : Number(file.size),
+      24,
+    ); // Uncompressed size
+    cdBuf.writeUInt16LE(nameLen, 28); // File name length
+    cdBuf.writeUInt16LE(extraFieldLength, 30); // Extra field length
+    cdBuf.writeUInt16LE(0, 32); // File comment length
+    cdBuf.writeUInt16LE(0, 34); // Disk number start
+    cdBuf.writeUInt16LE(0, 36); // Internal file attributes
+    cdBuf.writeUInt32LE(0, 38); // External file attributes
+    cdBuf.writeUInt32LE(
+      file.offset >= BigInt(0xffffffff) ? 0xffffffff : Number(file.offset),
+      42,
+    ); // Relative offset of LFH
+
+    file.filename.copy(cdBuf, 46);
+
+    if (useZip64) {
+      let pos = 46 + nameLen;
+      cdBuf.writeUInt16LE(0x0001, pos); // Tag
+      cdBuf.writeUInt16LE(extraFieldLength - 4, pos + 2); // Size
+      pos += 4;
+      if (file.size >= BigInt(0xffffffff)) {
+        cdBuf.writeBigUInt64LE(file.size, pos);
+        cdBuf.writeBigUInt64LE(file.size, pos + 8);
+        pos += 16;
+      }
+      if (file.offset >= BigInt(0xffffffff)) {
+        cdBuf.writeBigUInt64LE(file.offset, pos);
+      }
+    }
+
+    await writeChunk(cdBuf);
+    cdSize += BigInt(cdBuf.length);
+  }
+
+  const totalEntries = BigInt(centralDirectory.length);
+  const useZip64Eocd =
+    totalEntries >= BigInt(0xffff) ||
+    cdStart >= BigInt(0xffffffff) ||
+    cdSize >= BigInt(0xffffffff);
+
+  if (useZip64Eocd) {
+    // ZIP64 EOCD
+    const eocd64Buf = Buffer.alloc(56);
+    eocd64Buf.writeUInt32LE(0x06064b50, 0); // ZIP64 EOCD signature
+    eocd64Buf.writeBigUInt64LE(BigInt(44), 4); // Size of ZIP64 EOCD record
+    eocd64Buf.writeUInt16LE(45, 12); // Version made by
+    eocd64Buf.writeUInt16LE(45, 14); // Version needed to extract
+    eocd64Buf.writeUInt32LE(0, 16); // Number of this disk
+    eocd64Buf.writeUInt32LE(0, 20); // Disk where CD starts
+    eocd64Buf.writeBigUInt64LE(totalEntries, 24); // Number of CD records on this disk
+    eocd64Buf.writeBigUInt64LE(totalEntries, 32); // Total number of CD records
+    eocd64Buf.writeBigUInt64LE(cdSize, 40); // Size of CD
+    eocd64Buf.writeBigUInt64LE(cdStart, 48); // Offset of start of CD
+    await writeChunk(eocd64Buf);
+
+    // ZIP64 EOCD Locator
+    const locBuf = Buffer.alloc(20);
+    locBuf.writeUInt32LE(0x07064b50, 0); // ZIP64 EOCD locator signature
+    locBuf.writeUInt32LE(0, 4); // Number of the disk with the start of the zip64 end of central directory
+    locBuf.writeBigUInt64LE(offset + cdSize, 8); // Relative offset of the zip64 end of central directory record
+    locBuf.writeUInt32LE(1, 16); // Total number of disks
+    await writeChunk(locBuf);
+  }
+
+  // Standard EOCD
+  const eocdBuf = Buffer.alloc(22);
+  eocdBuf.writeUInt32LE(0x06054b50, 0); // EOCD signature
+  eocdBuf.writeUInt16LE(0, 4); // Number of this disk
+  eocdBuf.writeUInt16LE(0, 6); // Disk where CD starts
+  eocdBuf.writeUInt16LE(
+    totalEntries >= BigInt(0xffff) ? 0xffff : Number(totalEntries),
+    8,
+  ); // Number of CD records on this disk
+  eocdBuf.writeUInt16LE(
+    totalEntries >= BigInt(0xffff) ? 0xffff : Number(totalEntries),
+    10,
+  ); // Total number of CD records
+  eocdBuf.writeUInt32LE(
+    cdSize >= BigInt(0xffffffff) ? 0xffffffff : Number(cdSize),
+    12,
+  ); // Size of CD
+  eocdBuf.writeUInt32LE(
+    cdStart >= BigInt(0xffffffff) ? 0xffffffff : Number(cdStart),
+    16,
+  ); // Offset of start of CD
+  eocdBuf.writeUInt16LE(0, 20); // ZIP file comment length
+  await writeChunk(eocdBuf);
+
+  await new Promise((resolve, reject) => {
+    writeStream.on("finish", resolve);
+    writeStream.on("error", reject);
+    writeStream.end();
+  });
 }
 
-export { readTRK, readTCK, readVTK, readTRX, readTT, saveTCK, saveTRK, saveVTK, saveTRX, readNiftiHeader };
+export {
+  readTRK,
+  readTCK,
+  readVTK,
+  readTRX,
+  readTT,
+  saveTCK,
+  saveTRK,
+  saveVTK,
+  saveTRX,
+  readNiftiHeader,
+};

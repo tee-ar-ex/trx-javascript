@@ -24,19 +24,19 @@ Benchmark run on a MacBook with an M2 Pro CPU, loading from local SSD.
 
 ### Format Summary
 
-| Format | Extension | Notes |
-|--------|-----------|-------|
-| tt | `.tt` | DSI Studio — very compact; 1/32 voxel precision (slightly lossy) |
-| tt.gz | `.tt.gz` | Gzip-compressed DSI Studio |
-| vtk | `.vtk` | VTK legacy (DiPy OFFSETS, `--offsets_dtype uint32`) |
-| tck | `.tck` | MRtrix format |
-| trk | `.trk` | TrackVis format |
-| trk.gz | `.trk.gz` | Gzip-compressed TrackVis |
-| trk.zst | `.trk.zst` | Zstandard-compressed TrackVis |
-| trx | `.trx` | Uncompressed TRX |
-| z.trx | `.trx` | Zip-compressed TRX |
-| 16.trx | `.trx` | TRX with float16 positions |
-| 16z.trx | `.trx` | Zip-compressed TRX with float16 positions |
+| Format  | Extension  | Notes                                                            |
+| ------- | ---------- | ---------------------------------------------------------------- |
+| tt      | `.tt`      | DSI Studio — very compact; 1/32 voxel precision (slightly lossy) |
+| tt.gz   | `.tt.gz`   | Gzip-compressed DSI Studio                                       |
+| vtk     | `.vtk`     | VTK legacy (DiPy OFFSETS, `--offsets_dtype uint32`)              |
+| tck     | `.tck`     | MRtrix format                                                    |
+| trk     | `.trk`     | TrackVis format                                                  |
+| trk.gz  | `.trk.gz`  | Gzip-compressed TrackVis                                         |
+| trk.zst | `.trk.zst` | Zstandard-compressed TrackVis                                    |
+| trx     | `.trx`     | Uncompressed TRX                                                 |
+| z.trx   | `.trx`     | Zip-compressed TRX                                               |
+| 16.trx  | `.trx`     | TRX with float16 positions                                       |
+| 16z.trx | `.trx`     | Zip-compressed TRX with float16 positions                        |
 
 > Note: Native zstd decompression is very fast, but the JavaScript
 > decompressor (`fzstd`) is relatively slower than native implementations.
