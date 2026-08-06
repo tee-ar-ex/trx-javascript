@@ -26,8 +26,6 @@ hs_err_pid*
 
 # Node
 node_modules/
-package-lock.json
-package.json
 
 # Sphinx docs build output
 docs/_build/
