@@ -15,5 +15,3 @@ node bench.mjs dpsv.trx
 ## Documentation
 
 Full documentation is available at (GitHub Pages URL).
-
-
