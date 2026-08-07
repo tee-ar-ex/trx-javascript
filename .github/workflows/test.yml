@@ -2,7 +2,7 @@ name: Run Tests
 
 on:
   push:
-    branches: [main, fixes_for_benchmark]
+    branches: [main]
   pull_request:
     branches: [main]
 
