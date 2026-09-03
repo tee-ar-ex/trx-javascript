@@ -12,6 +12,7 @@ extensions = [
     'myst_parser',
     'sphinx_js',
     'sphinx.ext.autosectionlabel',
+    'sphinx_design',
 ]
 
 js_source_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -52,6 +53,8 @@ html_sidebars = {
 myst_enable_extensions = [
     "colon_fence",
     "deflist",
+    "fieldlist",
+    "html_image",
     "tasklist",
 ]
 

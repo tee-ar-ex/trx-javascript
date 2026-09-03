@@ -4,13 +4,21 @@ This library provides a minimal JavaScript reader for brain tractography streaml
 formats, including **TRX**, but also **TRK**, **TCK**, **VTK**, and
 **TT** ([DSI Studio](https://dsi-studio.labsolver.org/)).
 
-```{toctree}
-:maxdepth: 2
-:caption: Contents
 
+::::{grid} 2
+:::{grid-item-card}  Usage documentation
+```{toctree}
+:maxdepth: 1
 getting-started
 api
 formats
+```
+:::
+:::{grid-item-card}  Development and benchmarks
+```{toctree}
+:maxdepth: 2
 implementation-notes
 benchmark
 ```
+:::
+::::
