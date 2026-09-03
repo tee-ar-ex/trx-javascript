@@ -546,16 +546,17 @@ function readTRK(buffer) {
   }
   let vox2mmMat = mat4.create();
   mat4.mul(vox2mmMat, zoomMat, mat);
-  let dataView = new DataView(buffer, hdr_sz);
-  if ((dataView.byteLength & 3) !== 0)
+  if (((buffer.byteLength - hdr_sz) & 3) !== 0)
     throw new Error("Invalid TRK: track data is not 32-bit aligned");
-  let totalWords = dataView.byteLength / 4;
+  const i32 = new Int32Array(buffer, hdr_sz);
+  const f32 = new Float32Array(buffer, hdr_sz);
+  let totalWords = i32.length;
 
   let num_streamlines = 0;
   let num_points = 0;
   let w = 0;
   while (w < totalWords) {
-    const n_pts = dataView.getInt32(w * 4, true);
+    const n_pts = i32[w];
     if (n_pts < 0) throw new Error("Invalid TRK: negative point count");
     const nextW = w + 1 + n_pts * (3 + n_scalars) + n_properties;
     if (nextW > totalWords)
@@ -582,13 +583,13 @@ function readTRK(buffer) {
   let npt3 = 0;
 
   while (w < totalWords) {
-    let n_pts = dataView.getInt32(w * 4, true);
+    let n_pts = i32[w];
     w = w + 1; // read 1 32-bit integer for number of points in this streamline
     offsetPt0[noffset++] = npt; //index of first vertex in this streamline
     for (let j = 0; j < n_pts; j++) {
-      let ptx = dataView.getFloat32(w * 4, true);
-      let pty = dataView.getFloat32((w + 1) * 4, true);
-      let ptz = dataView.getFloat32((w + 2) * 4, true);
+      let ptx = f32[w];
+      let pty = f32[w + 1];
+      let ptz = f32[w + 2];
       w += 3; //read 3 32-bit floats for XYZ position
       pts[npt3++] =
         ptx * vox2mmMat[0] +
@@ -607,7 +608,7 @@ function readTRK(buffer) {
         vox2mmMat[11];
       if (n_scalars > 0) {
         for (let s = 0; s < n_scalars; s++) {
-          dpv[s].vals[npt] = dataView.getFloat32(w * 4, true);
+          dpv[s].vals[npt] = f32[w];
           w++;
         }
       }
@@ -615,7 +616,7 @@ function readTRK(buffer) {
     } // for j: each point in streamline
     if (n_properties > 0) {
       for (let j = 0; j < n_properties; j++) {
-        dps[j].vals[noffset - 1] = dataView.getFloat32(w * 4, true);
+        dps[j].vals[noffset - 1] = f32[w];
         w++;
       }
     }
@@ -1032,93 +1033,6 @@ function readVTK(buffer) {
     indices,
   };
 } // readVTK()
-
-function getZip64OriginalSizes(zipData) {
-  // Parse the ZIP central directory to get correct uncompressed sizes.
-  // fflate ZIP64 bug: file.originalSize in the filter callback returns 0xFFFFFFFF
-  // (the 32-bit sentinel) instead of reading the real size from the ZIP64
-  // extended information extra field (tag 0x0001) in the central directory.
-  //
-  // Supports ZIP32 (entries < 4 GB, CD < 4 GB) and ZIP64 (entries or CD
-  // offset up to 2^53 bytes, the JavaScript safe-integer limit).
-  let u8;
-  if (zipData instanceof ArrayBuffer) {
-    u8 = new Uint8Array(zipData);
-  } else {
-    u8 = new Uint8Array(zipData.buffer, zipData.byteOffset, zipData.byteLength);
-  }
-  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
-  const n = u8.byteLength;
-  const sizes = {};
-
-  // Read a 64-bit little-endian uint as a JS number (safe up to 2^53)
-  function getUint64(offset) {
-    const lo = dv.getUint32(offset, true);
-    const hi = dv.getUint32(offset + 4, true);
-    return hi * 0x100000000 + lo;
-  }
-
-  // Find End of Central Directory record (PK\x05\x06) scanning backwards.
-  // Stop 22 bytes from end (minimum EOCD size); allow up to 64 KB ZIP comment.
-  let eocd = -1;
-  for (let i = n - 22; i >= Math.max(0, n - 65558); i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd === -1) return sizes;
-
-  let cdCount = dv.getUint16(eocd + 8, true);
-  let cdOffset = dv.getUint32(eocd + 16, true);
-
-  // Check for ZIP64 EOCD locator (PK\x06\x07), which must sit exactly 20
-  // bytes before the EOCD when no ZIP comment is present, but the ZIP spec
-  // only guarantees it precedes the EOCD — scan the last 64 KB for it.
-  for (let i = eocd - 20; i >= Math.max(0, eocd - 65558); i--) {
-    if (dv.getUint32(i, true) === 0x07064b50) {
-      // PK\x06\x07
-      const eocd64off = getUint64(i + 8); // offset of ZIP64 EOCD
-      if (eocd64off + 56 <= n && dv.getUint32(eocd64off, true) === 0x06064b50) {
-        cdCount = getUint64(eocd64off + 32); // 8-byte total entry count
-        cdOffset = getUint64(eocd64off + 48); // 8-byte CD start offset
-      }
-      break;
-    }
-  }
-
-  // Parse central directory records
-  let pos = cdOffset;
-  for (let i = 0; i < cdCount; i++) {
-    if (pos + 46 > n || dv.getUint32(pos, true) !== 0x02014b50) break; // PK\x01\x02
-    let origSize = dv.getUint32(pos + 24, true);
-    const fnLen = dv.getUint16(pos + 28, true);
-    const exLen = dv.getUint16(pos + 30, true);
-    const cmLen = dv.getUint16(pos + 32, true);
-    const fname = new TextDecoder().decode(
-      u8.subarray(pos + 46, pos + 46 + fnLen),
-    );
-    // If 0xFFFFFFFF, read real size from ZIP64 extended info extra field (tag 0x0001).
-    // The ZIP64 extra field encodes: origSize (8), compSize (8), localOffset (8),
-    // diskStart (4) — but only the fields that were 0xFFFFFFFF in the CD are present.
-    if (origSize === 0xffffffff) {
-      let ep = pos + 46 + fnLen;
-      const epEnd = ep + exLen;
-      while (ep + 4 <= epEnd) {
-        const tag = dv.getUint16(ep, true);
-        const sz = dv.getUint16(ep + 2, true);
-        if (tag === 0x0001 && sz >= 8) {
-          origSize = getUint64(ep + 4); // first 8-byte field is original size
-          break;
-        }
-        ep += 4 + sz;
-      }
-    }
-    sizes[fname] = origSize;
-    pos += 46 + fnLen + exLen + cmLen;
-  }
-  return sizes;
-} // getZip64OriginalSizes()
 
 /**
  * Read a TRX (.trx) file — the modern tractography format.
