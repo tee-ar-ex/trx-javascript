@@ -28,15 +28,15 @@ node bench.mjs dpsv.trx
 ### In Your Code
 
 ```javascript
-import { readTRK, readTCK, readVTK, readTRX, readTT } from './streamlineIO.mjs';
-import * as fs from 'fs';
+import { readTRK, readTCK, readVTK, readTRX, readTT } from "./streamlineIO.mjs";
+import * as fs from "fs";
 
 // TRK, TCK, VTK, TT — synchronous, from ArrayBuffer
-const trkData = readTRK(fs.readFileSync('tracts.trk').buffer);
+const trkData = readTRK(fs.readFileSync("tracts.trk").buffer);
 console.log(`${trkData.offsetPt0.length - 1} streamlines`);
 
 // TRX — async (supports URL or local file)
-const trxData = await readTRX('tracts.trx');
+const trxData = await readTRX("tracts.trx");
 console.log(trxData.header);
 ```
 

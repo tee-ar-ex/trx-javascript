@@ -19,16 +19,12 @@ Full documentation is available at the
 
 ### Building the documentation
 
-To build the documentationl locally, install jsdoc:
+To build the documentation locally, install jsdoc:
 
-   npm install -g jsdoc
+npm install -g jsdoc
 
 And python dependencies:
 
-   pip install sphinx myst-parser pydata-sphinx-theme sphinx-js
+pip install sphinx myst-parser pydata-sphinx-theme sphinx-js
 
 And then run `make html`
-
-
-
-
