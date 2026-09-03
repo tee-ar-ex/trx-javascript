@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
       - name: Install Python dependencies
         run: |
-          pip install sphinx myst-parser pydata-sphinx-theme sphinx-js
+          pip install sphinx myst-parser pydata-sphinx-theme sphinx-js sphinx-design
       - name: Install JSDoc
         run: npm install -g jsdoc
       - name: Build docs

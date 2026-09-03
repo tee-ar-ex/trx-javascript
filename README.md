@@ -14,4 +14,17 @@ node bench.mjs dpsv.trx
 
 ## Documentation
 
-Full documentation is available at (GitHub Pages URL).
+Full documentation is available at the
+[project website](https://tee-ar-ex.github.io/trx-javascript).
+
+### Building the documentation
+
+To build the documentation locally, install jsdoc:
+
+npm install -g jsdoc
+
+And python dependencies:
+
+pip install sphinx myst-parser pydata-sphinx-theme sphinx-js
+
+And then run `make html`
