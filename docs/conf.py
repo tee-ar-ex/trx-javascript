@@ -46,7 +46,7 @@ html_theme_options = {
 }
 
 html_sidebars = {
-    "**": ["sidebar-nav-bs.html"],
+    "**": ["sidebar-nav-bs.html", "implementation-links.html"],
 }
 
 myst_enable_extensions = [
